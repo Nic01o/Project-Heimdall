@@ -4,7 +4,7 @@ scheduler:
 modules:
 
   mymodule:
-    enabled: true
+    enabled: false
     class: 'alarmclock.modules.mymodule.mymodule:MyModule'
 
   sound:
@@ -17,6 +17,7 @@ modules:
     brightness: 100
 
   webui:
-    enabled: false
+    enabled: true
+    class: 'alarmclock.modules.webui.webui:WebUIModule'
     host: '0.0.0.0'
     port: 5000

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Alarm Clock{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<h1>Alarms</h1>
+<table>
+  <thead><tr><th>Label</th><th>Time</th><th>Repeat</th><th>Enabled</th><th></th></tr></thead>
+  <tbody>
+  {% for alarm in alarms %}
+    <tr>
+      <td>{{ alarm.label }}</td>
+      <td>{{ alarm.time or alarm.at }}</td>
+      <td>{{ alarm.repeat | join(', ') }}</td>
+      <td>{{ 'yes' if alarm.enabled else 'no' }}</td>
+      <td>
+        <form method="post" action="/ui/alarms/{{ alarm.id }}/stop" class="inline">
+          <button type="submit">Stop</button>
+        </form>
+        <form method="post" action="/ui/alarms/{{ alarm.id }}/snooze" class="inline">
+          <input type="number" name="minutes" value="9" min="1" style="width:4em">
+          <button type="submit">Snooze</button>
+        </form>
+        <form method="post" action="/ui/alarms/{{ alarm.id }}/delete" class="inline">
+          <button type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">No alarms yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>New alarm</h2>
+<form method="post" action="/ui/alarms">
+  <label>Time (HH:MM) <input type="text" name="time" placeholder="07:00"></label>
+  <label>or one-shot at <input type="datetime-local" name="at"></label>
+  <label>Label <input type="text" name="label"></label>
+  <fieldset>
+    <legend>Repeat (only used with Time)</legend>
+    {% for day in weekdays %}
+      <label><input type="checkbox" name="repeat" value="{{ day.value }}"> {{ day.name.capitalize() }}</label>
+    {% endfor %}
+  </fieldset>
+  <button type="submit">Create</button>
+</form>
+
+<h1>Modules</h1>
+<table>
+  <thead><tr><th>Name</th><th>Enabled</th><th></th></tr></thead>
+  <tbody>
+  {% for module in modules %}
+    <tr>
+      <td>{{ module.display_name or module.name }}</td>
+      <td>{{ 'yes' if module.enabled else 'no' }}</td>
+      <td>
+        {% if module.enabled %}
+          <form method="post" action="/ui/modules/{{ module.name }}/disable" class="inline">
+            <button type="submit">Disable</button>
+          </form>
+        {% else %}
+          <form method="post" action="/ui/modules/{{ module.name }}/enable" class="inline">
+            <button type="submit">Enable</button>
+          </form>
+        {% endif %}
+        {% if module.has_settings %}
+          <a href="/ui/modules/{{ module.name }}/settings">Settings</a>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% import "_widgets.html" as widgets %}
+{% block title %}{{ module.display_name or module.name }} settings{% endblock %}
+{% block content %}
+<h1>{{ module.display_name or module.name }} settings</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<form method="post" action="/ui/modules/{{ module.name }}/settings">
+  {% for key, field in schema.items() %}
+    {{ widgets.render_field(key, field, values.get(key)) }}
+  {% else %}
+    <p>This module has no configurable settings.</p>
+  {% endfor %}
+  {% if schema %}<button type="submit">Save</button>{% endif %}
+</form>
+
+<p><a href="/ui/">&larr; back</a></p>
+{% endblock %}

@@ -1,0 +1,38 @@
+{# Renders one settings field. `field.widget` must already be resolved
+   (see webui.py:_resolve_widgets) - this macro only maps widget -> markup,
+   it never looks at `field.type` directly. #}
+{% macro render_field(name, field, value) %}
+  <label class="field">
+    <span>{{ field.label or name }}</span>
+    {% if field.widget == "slider" %}
+      <input type="range" name="{{ name }}" value="{{ value }}"
+             {% if field.min is not none %}min="{{ field.min }}"{% endif %}
+             {% if field.max is not none %}max="{{ field.max }}"{% endif %}>
+    {% elif field.widget == "number" %}
+      <input type="number" name="{{ name }}" value="{{ value }}"
+             {% if field.min is not none %}min="{{ field.min }}"{% endif %}
+             {% if field.max is not none %}max="{{ field.max }}"{% endif %}>
+    {% elif field.widget == "toggle" %}
+      <input type="checkbox" name="{{ name }}" {% if value %}checked{% endif %}>
+    {% elif field.widget == "password" %}
+      <input type="password" name="{{ name }}" value="{{ value or '' }}">
+    {% elif field.widget == "colorpicker" %}
+      <input type="color" name="{{ name }}" value="{{ value or '#000000' }}">
+    {% elif field.widget == "dropdown" %}
+      <select name="{{ name }}">
+        {% for option in field.options %}
+          <option value="{{ option }}" {% if option == value %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    {% elif field.widget == "checkboxes" %}
+      <span class="checkboxes">
+      {% for option in field.options %}
+        <label><input type="checkbox" name="{{ name }}" value="{{ option }}"
+          {% if value and option in value %}checked{% endif %}> {{ option }}</label>
+      {% endfor %}
+      </span>
+    {% else %}
+      <input type="text" name="{{ name }}" value="{{ value or '' }}">
+    {% endif %}
+  </label>
+{% endmacro %}

@@ -31,16 +31,32 @@ def _load_module(name: str, mod_cfg: dict[str, Any], bus: EventBus) -> Module:
     return cls(name, bus, mod_cfg)
 
 
-async def _load_modules(cfg: dict[str, Any], bus: EventBus) -> list[Module]:
+async def _load_modules(cfg: dict[str, Any], bus: EventBus, scheduler: Scheduler) -> list[Module]:
+    """Instantiate and init() every enabled module, then attach cross-module
+    context (currently only used by webui) before enable()ing any of them.
+
+    This ordering matters: a module's attach_context() (e.g. webui) needs the
+    full registry, which only exists once every module has been init()'d -
+    regardless of where it sits in the YAML config.
+    """
     modules: list[Module] = []
     for name, mod_cfg in cfg.get("modules", {}).items():
         if not mod_cfg.get("enabled"):
             continue
         instance = _load_module(name, mod_cfg, bus)
         await instance.init()
-        await instance.enable()
         modules.append(instance)
-        logger.info("module %r enabled", name)
+        logger.info("module %r initialized", name)
+
+    for instance in modules:
+        attach_context = getattr(instance, "attach_context", None)
+        if attach_context is not None:
+            attach_context(scheduler, modules)
+
+    for instance in modules:
+        await instance.enable()
+        logger.info("module %r enabled", instance.name)
+
     return modules
 
 
@@ -60,7 +76,7 @@ async def run(cfg_path: Path, demo_alarm_seconds: int | None) -> None:
     _log_events(bus)
 
     scheduler = Scheduler(bus, timezone=cfg.get("scheduler", {}).get("timezone", "UTC"))
-    modules = await _load_modules(cfg, bus)
+    modules = await _load_modules(cfg, bus, scheduler)
 
     if demo_alarm_seconds is not None:
         now = datetime.datetime.now(scheduler.tz)
