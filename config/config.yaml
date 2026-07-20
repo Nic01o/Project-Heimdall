@@ -16,7 +16,7 @@ modules:
     gpio_pin: 17
     brightness: 100
 
-webapi:
-  enabled: false
-  host: '0.0.0.0'
-  port: 5000
+  webui:
+    enabled: false
+    host: '0.0.0.0'
+    port: 5000
