@@ -87,8 +87,14 @@ class WebUIModule(Module):
     display_name = "Web UI"
     icon = "globe"
 
-    def __init__(self, name: str, bus: Any, config: dict[str, Any] | None = None) -> None:
-        super().__init__(name, bus, config)
+    def __init__(
+        self,
+        name: str,
+        bus: Any,
+        config: dict[str, Any] | None = None,
+        store: Any = None,
+    ) -> None:
+        super().__init__(name, bus, config, store)
         self._scheduler: Scheduler | None = None
         self._modules: dict[str, Module] = {}
         self._server: uvicorn.Server | None = None

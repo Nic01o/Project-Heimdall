@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from alarmclock.core.event_bus import EventBus
+from alarmclock.core.persistence import JSONStore
 from alarmclock.modules.base import Module
 from alarmclock.modules.settings_types import SettingsValidationError, validate_against_schema
 
@@ -110,6 +111,35 @@ def test_module_update_settings_rejects_invalid_value_without_mutating_state():
         assert module.settings == {"gpio_pin": 17, "brightness": 100}
 
     asyncio.run(scenario())
+
+
+def test_module_update_settings_persists_to_store(tmp_path):
+    async def scenario():
+        store = JSONStore(tmp_path / "state.json")
+        module = LightModule("light", EventBus(), {"gpio_pin": 17, "brightness": 100}, store)
+
+        await module.update_settings({"brightness": 50})
+
+        assert store.get("modules.light") == {"gpio_pin": 17, "brightness": 50}
+
+    asyncio.run(scenario())
+
+
+def test_module_loads_persisted_settings_over_config_defaults(tmp_path):
+    store = JSONStore(tmp_path / "state.json")
+    store.set("modules.light", {"gpio_pin": 17, "brightness": 80})
+
+    module = LightModule("light", EventBus(), {"gpio_pin": 17, "brightness": 100}, store)
+
+    assert module.settings == {"gpio_pin": 17, "brightness": 80}
+
+
+def test_module_without_persisted_settings_falls_back_to_config(tmp_path):
+    store = JSONStore(tmp_path / "state.json")
+
+    module = LightModule("light", EventBus(), {"gpio_pin": 17, "brightness": 100}, store)
+
+    assert module.settings == {"gpio_pin": 17, "brightness": 100}
 
 
 def test_module_default_get_settings_schema_is_empty():

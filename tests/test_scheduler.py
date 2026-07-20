@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from alarmclock.core.alarm import Alarm, Weekday
 from alarmclock.core.event_bus import EventBus
+from alarmclock.core.persistence import JSONStore
 from alarmclock.core.scheduler import Scheduler
 
 TZ = ZoneInfo("UTC")
@@ -70,6 +71,16 @@ def test_alarm_requires_exactly_one_of_time_or_at():
         Alarm()
     with pytest.raises(ValueError):
         Alarm(time=datetime.time(7, 0), at=dt(2026, 7, 20, 7, 0))
+
+
+def test_alarm_from_dict_round_trips_to_dict():
+    recurring = Alarm(
+        time=datetime.time(7, 30), label="Wake up", repeat=frozenset({Weekday.MONDAY})
+    )
+    assert Alarm.from_dict(recurring.to_dict()) == recurring
+
+    one_shot = Alarm(at=dt(2026, 7, 20, 7, 0), label="Demo")
+    assert Alarm.from_dict(one_shot.to_dict()) == one_shot
 
 
 def test_snooze_creates_new_one_shot_alarm():
@@ -142,5 +153,41 @@ def test_run_loop_picks_up_newly_added_alarm_while_waiting():
 
         assert len(fired) == 1
         assert fired[0]["id"] == alarm.id
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_persists_alarms_to_store_on_add_and_remove(tmp_path):
+    store = JSONStore(tmp_path / "state.json")
+    sched = Scheduler(EventBus(), timezone="UTC", store=store)
+
+    alarm = sched.add_alarm(Alarm(time=datetime.time(7, 0), label="Wake up"))
+    assert store.get("alarms") == [alarm.to_dict()]
+
+    sched.remove_alarm(alarm.id)
+    assert store.get("alarms") == []
+
+
+def test_scheduler_loads_persisted_alarms_on_construction(tmp_path):
+    store = JSONStore(tmp_path / "state.json")
+    first = Scheduler(EventBus(), timezone="UTC", store=store)
+    alarm = first.add_alarm(Alarm(time=datetime.time(7, 0), label="Wake up"))
+
+    second = Scheduler(EventBus(), timezone="UTC", store=store)
+    assert second.get_alarm(alarm.id) == alarm
+
+
+def test_scheduler_persists_removal_of_fired_one_shot_alarm(tmp_path):
+    async def scenario():
+        store = JSONStore(tmp_path / "state.json")
+        bus = EventBus()
+        sched = Scheduler(bus, timezone="UTC", store=store)
+        sched.add_alarm(Alarm(at=datetime.datetime.now(TZ) + datetime.timedelta(milliseconds=50)))
+
+        await sched.start()
+        await asyncio.sleep(0.2)
+        await sched.stop()
+
+        assert store.get("alarms") == []
 
     asyncio.run(scenario())

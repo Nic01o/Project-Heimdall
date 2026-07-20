@@ -61,3 +61,15 @@ class Alarm:
             "repeat": sorted(int(day) for day in self.repeat),
             "enabled": self.enabled,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Alarm":
+        """Inverse of to_dict(), used to restore persisted alarms."""
+        return cls(
+            time=datetime.time.fromisoformat(data["time"]) if data["time"] else None,
+            at=datetime.datetime.fromisoformat(data["at"]) if data["at"] else None,
+            label=data["label"],
+            repeat=frozenset(Weekday(day) for day in data["repeat"]),
+            enabled=data["enabled"],
+            id=data["id"],
+        )

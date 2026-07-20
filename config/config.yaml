@@ -1,6 +1,9 @@
 scheduler:
   timezone: 'Europe/Berlin'
 
+persistence:
+  path: 'data/state.json'
+
 modules:
 
   mymodule:

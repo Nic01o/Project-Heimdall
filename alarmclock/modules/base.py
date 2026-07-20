@@ -22,15 +22,26 @@ class Module(abc.ABC):
     display_name: str | None = None
     icon: str | None = None
 
-    def __init__(self, name: str, bus: Any, config: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        bus: Any,
+        config: dict[str, Any] | None = None,
+        store: Any = None,
+    ) -> None:
         self.name = name
         self.bus = bus
         self.config = config or {}
+        self.store = store
         self.enabled = False
         self.logger = logging.getLogger(f"alarmclock.modules.{name}")
         self.settings: dict[str, Any] = {
             key: value for key, value in self.config.items() if key not in _RESERVED_CONFIG_KEYS
         }
+        if self.store is not None:
+            persisted = self.store.get(f"modules.{name}")
+            if persisted is not None:
+                self.settings.update(persisted)
 
     @abc.abstractmethod
     async def init(self) -> None:
@@ -81,4 +92,6 @@ class Module(abc.ABC):
         schema = await self.get_settings_schema()
         validated = validate_against_schema(values, schema)
         self.settings = {**self.settings, **validated}
+        if self.store is not None:
+            self.store.set(f"modules.{self.name}", self.settings)
         await self.bus.emit(f"{self.name}.settings_changed", self.settings)

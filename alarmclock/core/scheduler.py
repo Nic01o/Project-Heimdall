@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from alarmclock.core.alarm import Alarm, Weekday
 from alarmclock.core.event_bus import EventBus
+from alarmclock.core.persistence import JSONStore
 
 logger = logging.getLogger("alarmclock.core.scheduler")
 
@@ -19,29 +20,51 @@ NowFn = Callable[[], datetime.datetime]
 class Scheduler:
     """Waits for the next due alarm and emits `alarm.triggered` on the bus.
 
-    Knows nothing about hardware or persistence. The clock (`now`) is
-    injectable so the scheduling logic can be unit-tested without waiting
-    on real time.
+    Knows nothing about hardware. The clock (`now`) is injectable so the
+    scheduling logic can be unit-tested without waiting on real time. If a
+    `store` is given, alarms are persisted under the "alarms" key on every
+    change and restored from it at construction time.
     """
 
-    def __init__(self, bus: EventBus, timezone: str = "UTC", *, now: NowFn | None = None) -> None:
+    def __init__(
+        self,
+        bus: EventBus,
+        timezone: str = "UTC",
+        *,
+        now: NowFn | None = None,
+        store: JSONStore | None = None,
+    ) -> None:
         self.bus = bus
         self.tz = ZoneInfo(timezone)
         self._now = now or (lambda: datetime.datetime.now(self.tz))
+        self._store = store
         self._alarms: dict[str, Alarm] = {}
         self._task: asyncio.Task[None] | None = None
         self._changed = asyncio.Event()
+
+        if self._store is not None:
+            for data in self._store.get("alarms", []):
+                alarm = Alarm.from_dict(data)
+                self._alarms[alarm.id] = alarm
+
+    # -- persistence ---------------------------------------------------------
+
+    def _persist(self) -> None:
+        if self._store is not None:
+            self._store.set("alarms", [alarm.to_dict() for alarm in self._alarms.values()])
 
     # -- alarm management --------------------------------------------------
 
     def add_alarm(self, alarm: Alarm) -> Alarm:
         self._alarms[alarm.id] = alarm
         self._changed.set()
+        self._persist()
         return alarm
 
     def remove_alarm(self, alarm_id: str) -> None:
         if self._alarms.pop(alarm_id, None) is not None:
             self._changed.set()
+            self._persist()
 
     def get_alarm(self, alarm_id: str) -> Alarm | None:
         return self._alarms.get(alarm_id)
@@ -118,6 +141,7 @@ class Scheduler:
         logger.info("alarm %s triggered", alarm.id)
         if alarm.is_one_shot:
             self._alarms.pop(alarm.id, None)
+            self._persist()
         await self.bus.emit("alarm.triggered", alarm.to_dict())
 
     # -- ringing control, per the Wecker-Events TODO --------------------------

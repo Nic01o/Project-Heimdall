@@ -26,6 +26,7 @@
 - [x] Web-UI-Modul – REST-API (Alarme, Modul enable/disable, Settings-Schema/get/update) – einziger Online-Weg zum Ändern von Settings
 - [x] Web-UI-Modul – Frontend: generisches Settings-Formular-Rendering aus Modul-Schema (Jinja2-Templates statt React, klassische Forms ohne JS)
 - [x] Web-UI-Modul – Widget-Library gemappt auf Field-Type-Vokabular (ein Settings-Tab pro Modul, kein modulspezifischer Frontend-Code)
+- [x] Persistenz per JSON (`core/persistence.py:JSONStore`) für Alarme + Modul-Settings
 - [ ] SQLite statt reinem JSON für die Persistenz (meh, optional)
 - [ ] HAL mit Mock-/Real-Treiber fürs erste Hardware-Modul (Licht)
 - [ ] Rudimentäre Steuerung (CLI reicht fürs Erste)
