@@ -1,5 +1,4 @@
 .venv
 .idea
 /rpi_config.txt
-/requirements.txt
 /data/
