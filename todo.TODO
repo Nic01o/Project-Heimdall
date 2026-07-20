@@ -3,10 +3,11 @@
 ## Wichtig (Fundament)
 
 - [x] Kurze Architekturnotiz festhalten (reicht ein README – Core/Module in einem Prozess, Plugin-Interface, Watchdog, Remote-Option später)
-- [ ] Projektstruktur: core/, modules/, config/, tests/, systemd/
-- [ ] Plugin-Interface als abc.ABC definieren: init(), enable(), disable(), on_event() (async)
-- [ ] Event-Bus als asyncio-Pub/Sub bauen – Transport so kapseln, dass später ein Unix-Socket-Transport reinpasst, ohne Modul-Code anzufassen
-- [ ] Scheduler (Alarm-Logik, Wiederholungen) hardwareunabhängig + Unit-Tests
+- [x] Projektstruktur: core/, modules/, config/, tests/, systemd/
+- [x] Plugin-Interface als abc.ABC definieren: init(), enable(), disable(), on_event() (async)
+- [x] Event-Bus als asyncio-Pub/Sub bauen
+  - [x] Events als serialisierbare Dicts
+- [x] Scheduler (Alarm-Logik, Wiederholungen) hardwareunabhängig + Unit-Tests
 - [ ] Datenmodell für Alarm (Zeit, Wiederholung, Label, verknüpfte Events)
 - [ ] Config in YAML, Loader aktiviert/deaktiviert Module
 - [ ] Erstes Mock-Modul bauen, um den kompletten Durchlauf Core -> Bus -> Modul zu verifizieren
@@ -15,24 +16,36 @@
 - [ ] Wecker-Logik wie apples Schlafplan:
   - [ ] Wecker-Profile (z.B. „Wochentage“, „Wochenende“)
   - [ ] Wecker-Events (z.B. „Wecker klingelt“, „Wecker wird gestoppt“, „Wecker wird verschoben“)
+- [x] [PRIORITY] Modul-Settings-Pattern: `get_settings_schema` / `get_settings` / `update_settings` auf Module-Basisklasse (nur Validierung, keine Seiteneffekte; Persistierung fehlt noch, siehe SQLite-TODO)
+- [x] [PRIORITY] Gemeinsames Field-Type-Vokabular (`modules/settings_types.py`, generische Schema-Validierung in Module-Basisklasse)
+- [ ] Sound-Modul (Mock)
 
 ## Mittel (Ausbau)
 
 - [ ] systemd-Unit + Watchdog-Integration (sd_notify)
-- [ ] REST-API (FastAPI passt gut zum asyncio-Core) – Basis für spätere Web-UI und für CLI-Steuerung schon jetzt nutzbar
-- [ ] SQLite statt reinem JSON für die Persistenz
+- [ ] Web-UI-Modul – REST-API (Alarme, Modul enable/disable, Settings-Schema/get/update) – einziger Online-Weg zum Ändern von Settings
+- [ ] Web-UI-Modul – Frontend: generisches Settings-Formular-Rendering aus Modul-Schema
+- [ ] Web-UI-Modul – Widget-Library gemappt auf Field-Type-Vokabular (ein Settings-Tab pro Modul, kein modulspezifischer Frontend-Code)
+- [ ] SQLite statt reinem JSON für die Persistenz (meh, optional)
 - [ ] HAL mit Mock-/Real-Treiber fürs erste Hardware-Modul (Licht)
-- [ ] Unix-Socket-Transport für den Remote-Adapter als Proof-of-Concept bauen (testen, aber noch kein Modul produktiv auslagern)
 - [ ] Rudimentäre Steuerung (CLI reicht fürs Erste)
 - [ ] CI-Setup für automatisierte Tests
 
 ## Irgendwann mal
 
-- [ ] Web-UI vollwertig ausbauen
 - [ ] Mikrofon-Modul
 - [ ] Textpanel-Anbindung
 - [ ] Mehrere Wecker-Profile
 - [ ] Kalender-/Cloud-Anbindung
 - [ ] Mobile-optimierte UI / PWA
 - [ ] Schlafstatistik/Verlauf
-- [ ] Ein Modul tatsächlich auslagern (Remote-Adapter produktiv einsetzen), falls es mal wirklich nötig wird
+- [ ] Lokale GUI
+- [ ] Button-Input
+- [ ] Wecksound-Bibliothek (mehrere Klänge/Playlists statt nur ein Sound)
+- [ ] Sonnenaufgangssimulation (Licht graduell hochdimmen vor dem Alarm)
+- [ ] Snooze via Bewegungs-/Präsenzsensor (z.B. PIR-Sensor)
+- [ ] Sprachsteuerung (baut auf Mikrofon-Modul auf)
+- [ ] Bluetooth-Lautsprecher-Ausgabe
+- [ ] NFC/RFID-Tag zum Ausschalten
+- [ ] Push-Benachrichtigung (Status an Handy)
+- [ ] Home-Assistant/MQTT-Bridge
