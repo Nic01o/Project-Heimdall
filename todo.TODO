@@ -10,7 +10,7 @@
 - [x] Scheduler (Alarm-Logik, Wiederholungen) hardwareunabhängig + Unit-Tests
 - [ ] Datenmodell für Alarm (Zeit, Wiederholung, Label, verknüpfte Events)
 - [ ] Config in YAML, Loader aktiviert/deaktiviert Module
-- [ ] Erstes Mock-Modul bauen, um den kompletten Durchlauf Core -> Bus -> Modul zu verifizieren
+- [x] Erstes Mock-Modul bauen, um den kompletten Durchlauf Core -> Bus -> Modul zu verifizieren
 - [ ] Logging-Setup
 - [ ] Exceptions in Modul-Callbacks sauber abfangen – ein Modul-Fehler darf den Core nicht mitreißen (wichtig, da alles in einem Prozess läuft)
 - [ ] Wecker-Logik wie apples Schlafplan:
