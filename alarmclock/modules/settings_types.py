@@ -10,9 +10,9 @@ FIELD_TYPES: dict[str, dict[str, Any]] = {
     "float": {"widget": "number"},
     "bool": {"widget": "toggle"},
     "string": {"widget": "text"},
-    "password": {"widget": "password"},         # masked in the UI, e.g. WiFi key
-    "select": {"widget": "dropdown"},           # needs "options"
-    "multiselect": {"widget": "checkboxes"},    # needs "options"
+    "password": {"widget": "password"},  # masked in the UI, e.g. WiFi key
+    "select": {"widget": "dropdown"},  # needs "options"
+    "multiselect": {"widget": "checkboxes"},  # needs "options"
     "color": {"widget": "colorpicker"},
 }
 
@@ -22,7 +22,7 @@ class SettingsValidationError(ValueError):
 
 
 def validate_against_schema(
-    values: dict[str, Any], schema: dict[str, dict[str, Any]]
+        values: dict[str, Any], schema: dict[str, dict[str, Any]]
 ) -> dict[str, Any]:
     """Validate `values` against `schema` (as returned by `get_settings_schema`).
 
