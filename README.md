@@ -63,7 +63,7 @@ alarm-clock/
 │   │   │   ├── mock.py        # Test implementation
 │   │   │   └── real.py        # Hardware implementation
 │   │   ├── light/
-│   │   ├── webapi/
+│   │   ├── webui/             # frontend 
 │   │   └── ...
 │   ├── daemon.py              # Main entry point
 │   └── exceptions.py          # Custom errors
@@ -72,11 +72,12 @@ alarm-clock/
 │   ├── test_event_bus.py
 │   └── ...
 ├── config/
-│   └── default.yaml           # Default configuration
+│   └── config.yaml           # Default configuration
 ├── systemd/
-│   └── alarmclock.service     # systemd unit file
+│   └── alarmclock.service    # systemd unit file
 ├── requirements.txt
-└── README.md
+├── README.md
+└── todo.TODO                 # well, todos
 ```
 
 ## Plugin System
@@ -85,7 +86,7 @@ Extend the clock by creating a new module. Implement the base interface:
 
 ```python
 from alarmclock.modules.base import Module
-
+ 
 class MyModule(Module):
     async def init(self):
         """Called once at startup."""
@@ -103,7 +104,160 @@ class MyModule(Module):
     async def disable(self):
         """Disable the module."""
         pass
+ 
+    async def get_settings_schema(self) -> dict:
+        """Describe this module's settings (used by UI/CLI to render forms)."""
+        return {}
+ 
+    async def get_settings(self) -> dict:
+        """Return current settings values."""
+        return {}
+ 
+    async def update_settings(self, values: dict) -> None:
+        """Validate and persist new settings. No side effects here—
+        the module itself decides what to do with changed values via
+        its own event handlers (e.g. reacting to `<module>.settings_changed`)."""
+        pass
 ```
+
+### Module Settings Pattern
+ 
+Modules own their settings schema; the core and UI stay generic. This lets a
+future web UI (or CLI) render a settings form for *any* module without
+knowing anything about its internals:
+ 
+```python
+class LightModule(Module):
+    async def get_settings_schema(self):
+        return {
+            "gpio_pin": {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"},
+            "brightness": {"type": "int", "min": 0, "max": 100, "label": "Brightness"},
+        }
+ 
+    async def get_settings(self):
+        return self.settings
+ 
+    async def update_settings(self, values):
+        validated = self._validate(values)
+        self.settings = {**self.settings, **validated}
+        await self.config.persist("modules.light", self.settings)
+        await self.bus.emit('light.settings_changed', self.settings)
+```
+ 
+`update_settings()` only validates, stores, and persists—no hardware side
+effects. The module reacts to its own `*.settings_changed` event (or on its
+next regular cycle) to actually apply the change. This keeps "change config"
+cleanly separated from "act on config".
+ 
+> **Note:** `update_settings()` is a method on the module itself, callable
+> internally (e.g. from the CLI) via the event bus. Only the **`webui`
+> module** is allowed to expose it over HTTP. Other modules are free to run
+> their own online APIs for their own purposes (e.g. a weather module
+> calling out to a forecast API), but none of them—and not the core
+> either—get an HTTP endpoint for changing settings. That path exists
+> exclusively through the web UI.
+ 
+### Shared Field-Type Vocabulary
+ 
+For `webui` to render a settings tab for *any* module without knowing that
+module, schema fields declare a `type` from a small, fixed vocabulary that
+both backend (validation) and frontend (widget choice) understand:
+ 
+```python
+# modules/settings_types.py
+"""Shared vocabulary for settings fields.
+Each type has one fixed meaning for validation AND rendering."""
+ 
+FIELD_TYPES = {
+    "int":         {"widget": "number"},
+    "float":       {"widget": "number"},
+    "bool":        {"widget": "toggle"},
+    "string":      {"widget": "text"},
+    "password":    {"widget": "password"},   # masked in the UI, e.g. WiFi key
+    "select":      {"widget": "dropdown"},   # needs "options"
+    "multiselect": {"widget": "checkboxes"}, # needs "options"
+    "color":       {"widget": "colorpicker"},
+}
+```
+ 
+`widget` is optional per field—every `type` has a sensible default widget,
+but a field can override it (e.g. an `int` rendered as a `slider` instead of
+a plain number box):
+ 
+```python
+class LightModule(Module):
+    async def get_settings_schema(self):
+        return {
+            "gpio_pin":   {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"},
+            "brightness": {"type": "int", "min": 0, "max": 100, "label": "Brightness", "widget": "slider"},
+            "color":      {"type": "color", "label": "Light color"},
+            "mode":       {"type": "select", "options": ["fade", "instant"], "label": "Transition"},
+        }
+```
+ 
+Because the vocabulary is fixed, validation itself can move into the
+`Module` base class instead of being reimplemented per module:
+ 
+```python
+class Module(abc.ABC):
+    async def update_settings(self, values: dict) -> None:
+        schema = await self.get_settings_schema()
+        validated = validate_against_schema(values, schema)  # generic, from settings_types.py
+        self.settings = {**self.settings, **validated}
+        await self.config.persist(f"modules.{self.name}", self.settings)
+        await self.bus.emit(f'{self.name}.settings_changed', self.settings)
+```
+ 
+Modules only override this when they have a real special case.
+ 
+To label the settings tab itself, modules can expose an optional class
+attribute rather than smuggling it into the schema (keeps it from colliding
+with real settings fields):
+ 
+```python
+class LightModule(Module):
+    display_name = "Light"
+    icon = "lightbulb"
+```
+ 
+### `webui` Widget Library
+ 
+On the frontend, `webui` ships a small widget library that maps 1:1 onto
+`FIELD_TYPES`, so adding a settings tab for a new module needs zero
+module-specific frontend code:
+ 
+```javascript
+const WIDGETS = {
+  number:      NumberField,
+  slider:      SliderField,
+  toggle:      ToggleField,
+  text:        TextField,
+  password:    PasswordField,
+  dropdown:    SelectField,
+  checkboxes:  MultiSelectField,
+  colorpicker: ColorField,
+};
+ 
+function renderField(key, field, value, onChange) {
+  const Widget = WIDGETS[field.widget ?? DEFAULT_WIDGET[field.type]];
+  return <Widget label={field.label} value={value} onChange={v => onChange(key, v)} {...field} />;
+}
+```
+ 
+`webui` discovers modules and builds one settings tab per module purely from
+their schema:
+ 
+```javascript
+const modules = await fetch('/modules').then(r => r.json());
+ 
+for (const mod of modules) {
+  const schema = await fetch(`/modules/${mod.name}/settings/schema`).then(r => r.json());
+  if (Object.keys(schema).length > 0) {
+    renderSettingsTab(mod.display_name ?? mod.name, schema, mod.name);
+  }
+}
+```
+
 
 Register it in `config/default.yaml`:
 
@@ -171,46 +325,27 @@ sudo systemctl status alarmclock
 journalctl -u alarmclock -f
 ```
 
-## REST API
 
-Once the webapi module is enabled, interact with the daemon via HTTP:
 
-```bash
-# Get all alarms
-curl http://localhost:5000/alarms
 
-# Create a new alarm
-curl -X POST http://localhost:5000/alarms \
-  -H 'Content-Type: application/json' \
-  -d '{"time": "07:00", "label": "Wake up", "enabled": true}'
+## Module Ideas
 
-# Toggle a module
-curl -X POST http://localhost:5000/modules/light/enable
-```
+Brainstorm of possible future modules (unsorted, non-binding):
 
-## Development Roadmap
-
-**Phase 1 (Foundation)**
-- [x] Core architecture
-- [ ] Scheduler + persistence
-- [ ] Event bus
-- [ ] Plugin interface
-- [ ] Sound module (mock)
-- [ ] Unit tests & logging
-- [ ] 
-
-**Phase 2 (Features)**
-- [ ] systemd integration
-- [ ] REST API
-- [ ] Light module
-- [ ] Basic CLI
-
-**Phase 3 (Polish)**
-- [ ] Web UI
-- [ ] Microphone module
-- [ ] Text panel integration
-- [ ] Remote adapter (optional)
-
-## License
+- Light
+- LCD Display
+- Local GUI
+- Button Input
+- Speaker
+- Microphone
+- Alarm sound library (multiple sounds/playlists instead of just one sound)
+- Sunrise simulation (gradually brighten light before the alarm)
+- Snooze via motion/presence sensor (e.g. PIR sensor)
+- Voice control (set/snooze alarm via voice command, builds on microphone)
+- Calendar sync (adjust alarms to the first appointment of the day)
+- Bluetooth speaker output (alternative/addition to speaker)
+- NFC/RFID tag to turn off (alarm can only be stopped via tag scan)
+- Push notification (status to phone: alarm triggered, module error)
+- Home Assistant/MQTT bridge (integration into existing smart home systems)
 
 MIT
