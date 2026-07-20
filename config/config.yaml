@@ -12,12 +12,26 @@ modules:
 
   sound:
     enabled: false
-    device: '/dev/audio'
+    class: 'alarmclock.modules.sound.sound:SoundModule'
+    pin: 18
+    driver: 'mock'
 
   light:
     enabled: false
     gpio_pin: 17
     brightness: 100
+
+  button:
+    enabled: false
+    class: 'alarmclock.modules.button.button:ButtonModule'
+    pin: 27
+    driver: 'mock'
+
+  button_combos:
+    enabled: false
+    class: 'alarmclock.modules.button_combos.button_combos:ButtonComboModule'
+    long_press_seconds: 1.0
+    combo_window_seconds: 0.4
 
   webui:
     enabled: true

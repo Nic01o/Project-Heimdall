@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import asyncio
 import logging
 from typing import Any
 
@@ -95,3 +96,106 @@ class Module(abc.ABC):
         if self.store is not None:
             self.store.set(f"modules.{self.name}", self.settings)
         await self.bus.emit(f"{self.name}.settings_changed", self.settings)
+
+
+class OutputModule(Module):
+    """Base for modules that drive a single GPIO pin as a simple on/off
+    output (a buzzer/speaker relay, a light relay, ...). Adds a shared `pin`
+    setting and a `set_output()`/`_write()` seam so mock vs. real hardware
+    only differs in how the write happens - `init()`/`on_event()` (what
+    triggers the output) stay module-specific and still need implementing.
+    """
+
+    async def get_settings_schema(self) -> dict[str, dict[str, Any]]:
+        schema = dict(await super().get_settings_schema())
+        schema.setdefault("pin", {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"})
+        return schema
+
+    @property
+    def pin(self) -> int:
+        return self.settings["pin"]
+
+    async def set_output(self, on: bool) -> None:
+        await self._write(on)
+        self.logger.debug("pin %s set to %s", self.pin, "on" if on else "off")
+
+    async def _write(self, on: bool) -> None:
+        """Actually drive the pin. Implemented by the concrete module
+        (typically by delegating to a mock or real driver, see modules/sound)."""
+        raise NotImplementedError
+
+    async def enable(self) -> None:
+        self.enabled = True
+
+    async def disable(self) -> None:
+        await self.set_output(False)
+        self.enabled = False
+
+
+class InputModule(Module):
+    """Base for modules that read a single GPIO pin as input (a button, a
+    PIR sensor, ...). Polls `_read()` in the background and calls
+    `_on_activated()` on every inactive -> active transition (e.g. a button
+    press) - `init()`/`on_event()`/what `_on_activated()` does stay
+    module-specific and still need implementing.
+    """
+
+    poll_interval: float = 0.05
+
+    def __init__(
+        self,
+        name: str,
+        bus: Any,
+        config: dict[str, Any] | None = None,
+        store: Any = None,
+    ) -> None:
+        super().__init__(name, bus, config, store)
+        self._poll_task: asyncio.Task[None] | None = None
+        self._last_state = False
+
+    async def get_settings_schema(self) -> dict[str, dict[str, Any]]:
+        schema = dict(await super().get_settings_schema())
+        schema.setdefault("pin", {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"})
+        return schema
+
+    @property
+    def pin(self) -> int:
+        return self.settings["pin"]
+
+    async def _read(self) -> bool:
+        """Read the current pin state. Implemented by the concrete module
+        (typically by delegating to a mock or real driver, see modules/button)."""
+        raise NotImplementedError
+
+    async def _on_activated(self) -> None:
+        """Called on every inactive -> active transition. No-op by default;
+        override to react (e.g. emit a bus event)."""
+
+    async def _on_deactivated(self) -> None:
+        """Called on every active -> inactive transition. No-op by default;
+        override to react (e.g. emit a bus event)."""
+
+    async def enable(self) -> None:
+        self.enabled = True
+        self._last_state = False
+        self._poll_task = asyncio.create_task(self._poll_loop())
+
+    async def disable(self) -> None:
+        self.enabled = False
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except asyncio.CancelledError:
+                pass
+            self._poll_task = None
+
+    async def _poll_loop(self) -> None:
+        while True:
+            state = await self._read()
+            if state and not self._last_state:
+                await self._on_activated()
+            elif not state and self._last_state:
+                await self._on_deactivated()
+            self._last_state = state
+            await asyncio.sleep(self.poll_interval)

@@ -18,7 +18,7 @@
   - [ ] Wecker-Events (z.B. „Wecker klingelt“, „Wecker wird gestoppt“, „Wecker wird verschoben“)
 - [x] [PRIORITY] Modul-Settings-Pattern: `get_settings_schema` / `get_settings` / `update_settings` auf Module-Basisklasse (nur Validierung, keine Seiteneffekte; Persistierung fehlt noch, siehe SQLite-TODO)
 - [x] [PRIORITY] Gemeinsames Field-Type-Vokabular (`modules/settings_types.py`, generische Schema-Validierung in Module-Basisklasse)
-- [ ] Sound-Modul (Mock)
+- [x] Sound-Modul (Mock + Real via `OutputModule`-Basisklasse und `driver: mock|real` Setting)
 
 ## Mittel (Ausbau)
 
@@ -28,7 +28,7 @@
 - [x] Web-UI-Modul – Widget-Library gemappt auf Field-Type-Vokabular (ein Settings-Tab pro Modul, kein modulspezifischer Frontend-Code)
 - [x] Persistenz per JSON (`core/persistence.py:JSONStore`) für Alarme + Modul-Settings
 - [ ] SQLite statt reinem JSON für die Persistenz (meh, optional)
-- [ ] HAL mit Mock-/Real-Treiber fürs erste Hardware-Modul (Licht)
+- [ ] Light-Modul auf `OutputModule` (siehe Sound) aufbauen - Mock-/Real-Treiber-Split ist jetzt wiederverwendbar, plus Brightness/PWM statt nur an/aus
 - [ ] Rudimentäre Steuerung (CLI reicht fürs Erste)
 - [ ] CI-Setup für automatisierte Tests
 
@@ -41,7 +41,8 @@
 - [ ] Mobile-optimierte UI / PWA
 - [ ] Schlafstatistik/Verlauf
 - [ ] Lokale GUI
-- [ ] Button-Input
+- [x] Button-Input (`InputModule`-Basisklasse, Mock-/Real-Treiber, emittiert `button.pressed`/`button.released`)
+- [x] Button-Druckkombis (`button_combos`-Modul: Single/Double/Triple-Click + Long-Press aus den Button-Events)
 - [ ] Wecksound-Bibliothek (mehrere Klänge/Playlists statt nur ein Sound)
 - [ ] Sonnenaufgangssimulation (Licht graduell hochdimmen vor dem Alarm)
 - [ ] Snooze via Bewegungs-/Präsenzsensor (z.B. PIR-Sensor)
