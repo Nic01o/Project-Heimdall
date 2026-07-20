@@ -1,0 +1,7 @@
+Hostname: SomeHostName
+Benutzername: SomeUserName
+Password: SomePassword
+
+SSID: SomeSSID
+Password: SomePassword
+
