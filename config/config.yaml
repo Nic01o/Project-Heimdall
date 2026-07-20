@@ -1,0 +1,22 @@
+scheduler:
+  timezone: 'Europe/Berlin'
+
+modules:
+
+  mymodule:
+    enabled: true
+    class: 'alarmclock.modules.mymodule.mymodule:MyModule'
+
+  sound:
+    enabled: false
+    device: '/dev/audio'
+
+  light:
+    enabled: false
+    gpio_pin: 17
+    brightness: 100
+
+webapi:
+  enabled: false
+  host: '0.0.0.0'
+  port: 5000
