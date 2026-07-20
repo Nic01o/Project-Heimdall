@@ -1,0 +1,38 @@
+# Project Heimdall – TODOfile
+
+## Wichtig (Fundament)
+
+- [x] Kurze Architekturnotiz festhalten (reicht ein README – Core/Module in einem Prozess, Plugin-Interface, Watchdog, Remote-Option später)
+- [ ] Projektstruktur: core/, modules/, config/, tests/, systemd/
+- [ ] Plugin-Interface als abc.ABC definieren: init(), enable(), disable(), on_event() (async)
+- [ ] Event-Bus als asyncio-Pub/Sub bauen – Transport so kapseln, dass später ein Unix-Socket-Transport reinpasst, ohne Modul-Code anzufassen
+- [ ] Scheduler (Alarm-Logik, Wiederholungen) hardwareunabhängig + Unit-Tests
+- [ ] Datenmodell für Alarm (Zeit, Wiederholung, Label, verknüpfte Events)
+- [ ] Config in YAML, Loader aktiviert/deaktiviert Module
+- [ ] Erstes Mock-Modul bauen, um den kompletten Durchlauf Core -> Bus -> Modul zu verifizieren
+- [ ] Logging-Setup
+- [ ] Exceptions in Modul-Callbacks sauber abfangen – ein Modul-Fehler darf den Core nicht mitreißen (wichtig, da alles in einem Prozess läuft)
+- [ ] Wecker-Logik wie apples Schlafplan:
+  - [ ] Wecker-Profile (z.B. „Wochentage“, „Wochenende“)
+  - [ ] Wecker-Events (z.B. „Wecker klingelt“, „Wecker wird gestoppt“, „Wecker wird verschoben“)
+
+## Mittel (Ausbau)
+
+- [ ] systemd-Unit + Watchdog-Integration (sd_notify)
+- [ ] REST-API (FastAPI passt gut zum asyncio-Core) – Basis für spätere Web-UI und für CLI-Steuerung schon jetzt nutzbar
+- [ ] SQLite statt reinem JSON für die Persistenz
+- [ ] HAL mit Mock-/Real-Treiber fürs erste Hardware-Modul (Licht)
+- [ ] Unix-Socket-Transport für den Remote-Adapter als Proof-of-Concept bauen (testen, aber noch kein Modul produktiv auslagern)
+- [ ] Rudimentäre Steuerung (CLI reicht fürs Erste)
+- [ ] CI-Setup für automatisierte Tests
+
+## Irgendwann mal
+
+- [ ] Web-UI vollwertig ausbauen
+- [ ] Mikrofon-Modul
+- [ ] Textpanel-Anbindung
+- [ ] Mehrere Wecker-Profile
+- [ ] Kalender-/Cloud-Anbindung
+- [ ] Mobile-optimierte UI / PWA
+- [ ] Schlafstatistik/Verlauf
+- [ ] Ein Modul tatsächlich auslagern (Remote-Adapter produktiv einsetzen), falls es mal wirklich nötig wird
