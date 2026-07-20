@@ -12,17 +12,18 @@ The architecture supports gradual optimization: modules remain in-process for si
 
 ```bash
 git clone git@github.com:Nic01o/Project-Heimdall.git
-cd alarm-clock
+cd Project-Heimdall
 
-
-pip3 freeze > requirements.txt
-pip3 install -r requirements.txt
+# Debian/Raspberry Pi OS won't let pip install system-wide (PEP 668) - use a venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 
 # Run tests
-python3 -m pytest
+python -m pytest
 
-# Start the daemon
-python3 -m alarmclock.daemon
+# Start the daemon (from the repo root, not from inside alarmclock/)
+python -m alarmclock.daemon
 ```
 
 ## Architecture
@@ -35,13 +36,13 @@ python3 -m alarmclock.daemon
 │  Core                    │  Modules     │
 │  • Scheduler             │  • Sound     │
 │  • Event Bus             │  • Light     │
-│  • Config Manager        │  • Web API   │
+│  • Config Manager        │  • Web UI    │
 │  • Persistence           │  • (others)  │
 └─────────────────────────────────────────┘
 ↕ systemd watchdog   ↕ (optional remote adapters)           
 ```
 
-**Core**: Manages alarm scheduling, fires events, persists state. Knows nothing about hardware.
+**Core**: Manages alarm scheduling, fires events, persists state (JSON key/value store; SQLite is a possible later upgrade). Knows nothing about hardware.
 
 **Modules**: Attach via plugin interface, listen for events, emit their own events. Each module has a mock (testable) and real (hardware-aware) implementation.
 
@@ -52,35 +53,38 @@ python3 -m alarmclock.daemon
 ## Project Structure
 
 ```
-alarm-clock/
+Project-Heimdall/
 ├── alarmclock/
 │   ├── core/
-│   │   ├── scheduler.py       # Alarm scheduling logic
-│   │   ├── event_bus.py       # Event pub/sub
-│   │   ├── config.py          # YAML config loading
-│   │   └── persistence.py     # SQLite storage
+│   │   ├── alarm.py            # Alarm data model (Alarm, Weekday)
+│   │   ├── scheduler.py        # Alarm scheduling logic
+│   │   ├── event_bus.py        # Event pub/sub
+│   │   ├── config.py           # YAML config loading
+│   │   └── persistence.py      # JSON key/value store (JSONStore)
 │   ├── modules/
-│   │   ├── base.py            # Plugin interface (abc.ABC)
-│   │   ├── sound/
-│   │   │   ├── __init__.py
-│   │   │   ├── mock.py        # Test implementation
-│   │   │   └── real.py        # Hardware implementation
-│   │   ├── light/
-│   │   ├── webui/             # frontend 
-│   │   └── ...
-│   ├── daemon.py              # Main entry point
-│   └── exceptions.py          # Custom errors
+│   │   ├── base.py             # Plugin interface (abc.ABC) + settings pattern
+│   │   ├── settings_types.py   # Shared field-type vocabulary + validation
+│   │   ├── mymodule/
+│   │   │   └── mymodule.py     # Minimal example/mock module
+│   │   ├── webui/
+│   │   │   ├── webui.py        # REST API + server-rendered control panel
+│   │   │   ├── templates/      # Jinja2 templates (index, settings form, widgets)
+│   │   │   └── static/         # CSS
+│   │   ├── sound/              # planned
+│   │   └── light/              # planned
+│   └── daemon.py               # Main entry point
 ├── tests/
 │   ├── test_scheduler.py
-│   ├── test_event_bus.py
-│   └── ...
+│   ├── test_settings.py
+│   ├── test_persistence.py
+│   ├── test_webui.py           # REST API
+│   ├── test_webui_pages.py     # server-rendered pages
+│   └── test_integration.py     # Core -> Bus -> Module round trip
 ├── config/
-│   └── config.yaml           # Default configuration
-├── systemd/
-│   └── alarmclock.service    # systemd unit file
+│   └── config.yaml            # Default configuration
 ├── requirements.txt
 ├── README.md
-└── todo.TODO                 # well, todos
+└── todo.TODO                  # well, todos
 ```
 
 ## Plugin System
@@ -123,11 +127,18 @@ class MyModule(Module):
         pass
 ```
 
+The three settings methods above already have working generic implementations on
+`Module` itself (empty schema, `self.settings`, and validate+merge+persist+emit) - a
+module only needs to override them for a real special case, most just override
+`get_settings_schema()`.
+
 ### Module Settings Pattern
  
-Modules own their settings schema; the core and UI stay generic. This lets a
-future web UI (or CLI) render a settings form for *any* module without
-knowing anything about its internals:
+Modules own their settings schema; the core and UI stay generic. This lets the
+web UI (or CLI) render a settings form for *any* module without knowing
+anything about its internals. A module only needs to override
+`get_settings_schema()` - the generic `update_settings()` on `Module` already
+validates, merges, persists, and emits the change event:
  
 ```python
 class LightModule(Module):
@@ -136,14 +147,14 @@ class LightModule(Module):
             "gpio_pin": {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"},
             "brightness": {"type": "int", "min": 0, "max": 100, "label": "Brightness"},
         }
- 
-    async def get_settings(self):
-        return self.settings
- 
+
+    # get_settings() and update_settings() are inherited from Module - override
+    # only for a real special case, e.g.:
     async def update_settings(self, values):
         validated = self._validate(values)
         self.settings = {**self.settings, **validated}
-        await self.config.persist("modules.light", self.settings)
+        if self.store is not None:
+            self.store.set(f"modules.{self.name}", self.settings)
         await self.bus.emit('light.settings_changed', self.settings)
 ```
  
@@ -207,9 +218,15 @@ class Module(abc.ABC):
         schema = await self.get_settings_schema()
         validated = validate_against_schema(values, schema)  # generic, from settings_types.py
         self.settings = {**self.settings, **validated}
-        await self.config.persist(f"modules.{self.name}", self.settings)
+        if self.store is not None:
+            self.store.set(f"modules.{self.name}", self.settings)  # JSONStore, see core/persistence.py
         await self.bus.emit(f'{self.name}.settings_changed', self.settings)
 ```
+
+`self.store` is an optional `JSONStore` the daemon passes to every module at
+construction time (`core/persistence.py`). It's also what restores settings on
+the next boot: `Module.__init__` overlays any previously persisted
+`modules.<name>` value on top of the YAML defaults from `config.yaml`.
  
 Modules only override this when they have a real special case.
  
@@ -223,77 +240,126 @@ class LightModule(Module):
     icon = "lightbulb"
 ```
  
-### `webui` Widget Library
- 
-On the frontend, `webui` ships a small widget library that maps 1:1 onto
-`FIELD_TYPES`, so adding a settings tab for a new module needs zero
-module-specific frontend code:
- 
-```javascript
-const WIDGETS = {
-  number:      NumberField,
-  slider:      SliderField,
-  toggle:      ToggleField,
-  text:        TextField,
-  password:    PasswordField,
-  dropdown:    SelectField,
-  checkboxes:  MultiSelectField,
-  colorpicker: ColorField,
-};
- 
-function renderField(key, field, value, onChange) {
-  const Widget = WIDGETS[field.widget ?? DEFAULT_WIDGET[field.type]];
-  return <Widget label={field.label} value={value} onChange={v => onChange(key, v)} {...field} />;
-}
-```
- 
-`webui` discovers modules and builds one settings tab per module purely from
-their schema:
- 
-```javascript
-const modules = await fetch('/modules').then(r => r.json());
- 
-for (const mod of modules) {
-  const schema = await fetch(`/modules/${mod.name}/settings/schema`).then(r => r.json());
-  if (Object.keys(schema).length > 0) {
-    renderSettingsTab(mod.display_name ?? mod.name, schema, mod.name);
-  }
-}
+### `webui` Widget Rendering
+
+`webui` is server-rendered (FastAPI + Jinja2, classic forms, no JS/build
+step required) rather than a JS single-page app, but the idea is the same:
+one generic template maps `field.widget` onto markup, so adding a settings
+tab for a new module needs zero module-specific frontend code.
+
+`webui.py` resolves each field's widget from `FIELD_TYPES` before rendering
+(`_resolve_widgets()`), then the `_widgets.html` Jinja2 macro switches on
+`field.widget` - never on `field.type` directly:
+
+```jinja
+{% macro render_field(name, field, value) %}
+  {% if field.widget == "number" %}
+    <input type="number" name="{{ name }}" value="{{ value }}">
+  {% elif field.widget == "toggle" %}
+    <input type="checkbox" name="{{ name }}" {% if value %}checked{% endif %}>
+  {% elif field.widget == "dropdown" %}
+    <select name="{{ name }}">...</select>
+  {# ... one branch per FIELD_TYPES widget ... #}
+  {% endif %}
+{% endmacro %}
 ```
 
+The settings page (`GET /ui/modules/<name>/settings`) loops over
+`get_settings_schema()` and renders one field per entry; submitting the form
+(`POST /ui/modules/<name>/settings`) parses the form data back into typed
+values and calls `module.update_settings(...)` - a classic Post/Redirect/Get,
+no JavaScript involved. `webui` discovers modules generically via the module
+registry it's given at startup (see "Web UI & REST API" below) and only
+shows a *Settings* link for modules whose `get_settings_schema()` is
+non-empty.
 
-Register it in `config/default.yaml`:
+Register a module in `config/config.yaml`:
 
 ```yaml
 modules:
   mymodule:
     enabled: true
-    class: 'alarmclock.modules.mymodule:MyModule'
+    class: 'alarmclock.modules.mymodule.mymodule:MyModule'
 ```
 
 ## Configuration
 
-All runtime settings live in a single YAML file. Modules are listed with their enabled status and parameters:
+All runtime settings live in a single YAML file (`config/config.yaml`). Each
+enabled module needs a `class` (dotted module path + `:ClassName`) that the
+daemon dynamically imports and instantiates - everything else in a module's
+block is passed through as its initial `config`/`settings`:
 
 ```yaml
 scheduler:
   timezone: 'Europe/Berlin'
 
+persistence:
+  path: 'data/state.json'    # JSON store for alarms + module settings; defaults to this if omitted
+
 modules:
+  mymodule:
+    enabled: false
+    class: 'alarmclock.modules.mymodule.mymodule:MyModule'
+
   sound:
-    enabled: true
+    enabled: false
     device: '/dev/audio'
-  
+
   light:
-    enabled: true
+    enabled: false
     gpio_pin: 17
     brightness: 100
 
-webapi:
-  enabled: true
-  host: '0.0.0.0'
-  port: 5000
+  webui:
+    enabled: true
+    class: 'alarmclock.modules.webui.webui:WebUIModule'
+    host: '0.0.0.0'
+    port: 5000
 ```
+
+Persisted module settings (written via `update_settings()`) take priority
+over these YAML defaults on the next boot - the YAML value is only the
+*initial* value the first time a module runs.
+
+## Web UI & REST API
+
+When `webui` is enabled, it's both a JSON REST API and a server-rendered
+browser control panel on the same port - `GET /` redirects to `/ui/`.
+
+Unlike other modules, `webui` gets direct references to the `Scheduler` and
+the full module registry (`attach_context()`, called by the daemon once every
+module has been `init()`'d) - a deliberate, singular exception to "modules
+only talk through the bus", since being the one cross-module control plane is
+its entire purpose.
+
+REST API (JSON):
+
+```bash
+# List / create / delete alarms
+curl http://localhost:5000/alarms
+curl -X POST http://localhost:5000/alarms \
+  -H 'Content-Type: application/json' \
+  -d '{"time": "07:00", "label": "Wake up"}'
+curl -X DELETE http://localhost:5000/alarms/<id>
+
+# Stop or snooze a ringing alarm
+curl -X POST http://localhost:5000/alarms/<id>/stop
+curl -X POST http://localhost:5000/alarms/<id>/snooze -d '{"minutes": 9}'
+
+# Modules: list, enable/disable, settings
+curl http://localhost:5000/modules
+curl -X POST http://localhost:5000/modules/light/enable
+curl http://localhost:5000/modules/light/settings/schema
+curl http://localhost:5000/modules/light/settings
+curl -X POST http://localhost:5000/modules/light/settings -d '{"brightness": 80}'
+```
+
+Browser UI (`/ui/...`, classic HTML forms, no JS): `/ui/` lists alarms and
+modules with a new-alarm form and enable/disable buttons; `/ui/modules/<name>/settings`
+renders that module's settings form generically from its schema (see
+"`webui` Widget Rendering" above). These are separate routes from the JSON
+API above even though they call the same `Scheduler`/`Module` methods under
+the hood - it keeps the REST API a pure JSON contract.
 
 ## Testing
 
@@ -303,14 +369,18 @@ Modules come with mock implementations so you can test the entire system without
 # Run all tests
 python -m pytest
 
-# Run tests for a specific module
-python -m pytest tests/test_sound.py
+# Run tests for a specific area
+python -m pytest tests/test_scheduler.py
+python -m pytest tests/test_webui.py tests/test_webui_pages.py
 
 # Run with coverage
 python -m pytest --cov=alarmclock
 ```
 
 ## Running as a systemd Service
+
+> **Not implemented yet** - there's no `systemd/` directory or unit file in
+> the repo yet (see `todo.TODO`). This is the intended usage once it exists.
 
 Copy the service file and enable it:
 
