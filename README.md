@@ -11,15 +11,18 @@ The architecture supports gradual optimization: modules remain in-process for si
 ## Quick Start
 
 ```bash
-git clone <repo>
+git clone git@github.com:Nic01o/Project-Heimdall.git
 cd alarm-clock
-pip install -r requirements.txt
+
+
+pip3 freeze > requirements.txt
+pip3 install -r requirements.txt
 
 # Run tests
-python -m pytest
+python3 -m pytest
 
 # Start the daemon
-python -m alarmclock.daemon
+python3 -m alarmclock.daemon
 ```
 
 ## Architecture
