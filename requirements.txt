@@ -6,3 +6,5 @@ httpx
 jinja2
 python-multipart
 RPi.GPIO; platform_machine == "armv6l" or platform_machine == "armv7l" or platform_machine == "aarch64"
+RPLCD[i2c]; platform_machine == "armv6l" or platform_machine == "armv7l" or platform_machine == "aarch64"
+Adafruit_DHT; platform_machine == "armv6l" or platform_machine == "armv7l" or platform_machine == "aarch64"

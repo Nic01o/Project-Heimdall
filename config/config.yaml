@@ -6,10 +6,6 @@ persistence:
 
 modules:
 
-  mymodule:
-    enabled: false
-    class: 'alarmclock.modules.mymodule.mymodule:MyModule'
-
   sound:
     enabled: false
     class: 'alarmclock.modules.sound.sound:SoundModule'
@@ -26,12 +22,38 @@ modules:
     class: 'alarmclock.modules.button.button:ButtonModule'
     pin: 27
     driver: 'mock'
-
-  button_combos:
-    enabled: false
-    class: 'alarmclock.modules.button_combos.button_combos:ButtonComboModule'
     long_press_seconds: 1.0
     combo_window_seconds: 0.4
+
+  lcd:
+    enabled: false
+    class: 'alarmclock.modules.lcd.lcd:LCDModule'
+    driver: 'mock'
+    interface: 'i2c'  # 'i2c' (backpack) or 'gpio' (raw RS/E/D4-D7 pins)
+    i2c_address: '0x27'
+    rs_pin: 7   # only used when interface is 'gpio'
+    e_pin: 8
+    rw_pin: -1  # -1 = not wired, R/W tied to GND
+    d4_pin: 25
+    d5_pin: 24
+    d6_pin: 23
+    d7_pin: 18
+    cols: 16
+    rows: 2
+
+  led:
+    enabled: false
+    class: 'alarmclock.modules.led.led:LEDModule'
+    pin: 22
+    driver: 'mock'
+    blink_interval_seconds: 0.3
+
+  dht11:
+    enabled: false
+    class: 'alarmclock.modules.dht11.dht11:DHT11Module'
+    pin: 4
+    driver: 'mock'
+    read_interval_seconds: 2.0
 
   webui:
     enabled: true
