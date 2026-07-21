@@ -1,6 +1,7 @@
 """Tests for the button module: InputModule base behavior (pin, settings
-schema, poll loop + edge detection), the button.pressed event, and both the
-mock and real (GPIO-mocked) button drivers.
+schema, poll loop + edge detection), the button.pressed/button.released
+events, the button.long_press/button.combo gestures derived from them, and
+both the mock and real (GPIO-mocked) button drivers.
 """
 
 import asyncio
@@ -19,6 +20,12 @@ def make_module(**extra_settings) -> ButtonModule:
     return module
 
 
+async def press_and_release(module, hold_seconds):
+    module._driver.press()
+    await asyncio.sleep(hold_seconds)
+    module._driver.release()
+
+
 def test_settings_schema_includes_pin_and_driver():
     async def scenario():
         module = make_module()
@@ -26,6 +33,16 @@ def test_settings_schema_includes_pin_and_driver():
         assert schema["pin"] == {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"}
         assert schema["driver"]["type"] == "select"
         assert schema["driver"]["options"] == ["mock", "real"]
+
+    asyncio.run(scenario())
+
+
+def test_settings_schema_has_pattern_thresholds():
+    async def scenario():
+        module = make_module()
+        schema = await module.get_settings_schema()
+        assert schema["long_press_seconds"]["type"] == "float"
+        assert schema["combo_window_seconds"]["type"] == "float"
 
     asyncio.run(scenario())
 
@@ -122,6 +139,183 @@ def test_holding_button_only_emits_once_per_press():
         await module.disable()
 
         assert len(events) == 2  # press, release, press again -> two edges
+
+    asyncio.run(scenario())
+
+
+def test_single_short_press_emits_combo_count_one():
+    async def scenario():
+        bus = EventBus()
+        module = ButtonModule("button", bus, {"pin": 27, "combo_window_seconds": 0.03})
+        module.poll_interval = 0.01
+        await module.init()
+
+        combos = []
+
+        async def on_combo(payload):
+            combos.append(payload)
+
+        bus.subscribe("button.combo", on_combo)
+
+        await module.enable()
+        await press_and_release(module, hold_seconds=0.01)
+        await asyncio.sleep(0.06)  # past the combo window
+        await module.disable()
+
+        assert combos == [{"name": "button", "pin": 27, "count": 1}]
+
+    asyncio.run(scenario())
+
+
+def test_double_press_emits_combo_count_two():
+    async def scenario():
+        bus = EventBus()
+        module = ButtonModule(
+            "button", bus, {"pin": 27, "combo_window_seconds": 0.05, "long_press_seconds": 1.0}
+        )
+        module.poll_interval = 0.01
+        await module.init()
+
+        combos = []
+
+        async def on_combo(payload):
+            combos.append(payload)
+
+        bus.subscribe("button.combo", on_combo)
+
+        await module.enable()
+        await press_and_release(module, hold_seconds=0.01)
+        await asyncio.sleep(0.02)  # well within the combo window
+        await press_and_release(module, hold_seconds=0.01)
+        await asyncio.sleep(0.08)  # now let the window elapse
+        await module.disable()
+
+        assert combos == [{"name": "button", "pin": 27, "count": 2}]
+
+    asyncio.run(scenario())
+
+
+def test_triple_press_emits_combo_count_three():
+    async def scenario():
+        bus = EventBus()
+        module = ButtonModule(
+            "button", bus, {"pin": 27, "combo_window_seconds": 0.05, "long_press_seconds": 1.0}
+        )
+        module.poll_interval = 0.01
+        await module.init()
+
+        combos = []
+
+        async def on_combo(payload):
+            combos.append(payload)
+
+        bus.subscribe("button.combo", on_combo)
+
+        await module.enable()
+        for _ in range(3):
+            await press_and_release(module, hold_seconds=0.01)
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.08)
+        await module.disable()
+
+        assert combos == [{"name": "button", "pin": 27, "count": 3}]
+
+    asyncio.run(scenario())
+
+
+def test_long_press_emits_long_press_not_combo():
+    async def scenario():
+        bus = EventBus()
+        module = ButtonModule(
+            "button", bus, {"pin": 27, "combo_window_seconds": 0.03, "long_press_seconds": 0.05}
+        )
+        module.poll_interval = 0.01
+        await module.init()
+
+        combos = []
+        long_presses = []
+
+        async def on_combo(payload):
+            combos.append(payload)
+
+        async def on_long_press(payload):
+            long_presses.append(payload)
+
+        bus.subscribe("button.combo", on_combo)
+        bus.subscribe("button.long_press", on_long_press)
+
+        await module.enable()
+        await press_and_release(module, hold_seconds=0.08)
+        await asyncio.sleep(0.05)
+        await module.disable()
+
+        assert combos == []
+        assert len(long_presses) == 1
+        assert long_presses[0]["name"] == "button"
+        assert long_presses[0]["pin"] == 27
+        assert long_presses[0]["duration"] >= 0.05
+
+    asyncio.run(scenario())
+
+
+def test_two_buttons_track_combos_independently():
+    async def scenario():
+        bus = EventBus()
+        module_a = ButtonModule("button_a", bus, {"pin": 17, "combo_window_seconds": 0.03})
+        module_b = ButtonModule("button_b", bus, {"pin": 27, "combo_window_seconds": 0.03})
+        module_a.poll_interval = 0.01
+        module_b.poll_interval = 0.01
+        await module_a.init()
+        await module_b.init()
+
+        combos = []
+
+        async def on_combo(payload):
+            combos.append(payload)
+
+        bus.subscribe("button.combo", on_combo)
+
+        await module_a.enable()
+        await module_b.enable()
+        await press_and_release(module_a, hold_seconds=0.01)
+        await press_and_release(module_b, hold_seconds=0.01)
+        await asyncio.sleep(0.06)
+        await module_a.disable()
+        await module_b.disable()
+
+        assert {"name": "button_a", "pin": 17, "count": 1} in combos
+        assert {"name": "button_b", "pin": 27, "count": 1} in combos
+        assert len(combos) == 2
+
+    asyncio.run(scenario())
+
+
+def test_release_without_matching_press_is_ignored():
+    async def scenario():
+        module = make_module()
+        await module.init()
+
+        # Should not raise even though the button was never marked pressed.
+        await module._on_deactivated()
+
+    asyncio.run(scenario())
+
+
+def test_disable_cancels_pending_combo_task():
+    async def scenario():
+        bus = EventBus()
+        module = ButtonModule("button", bus, {"pin": 27, "combo_window_seconds": 1.0})
+        module.poll_interval = 0.01
+        await module.init()
+
+        await module.enable()
+        await press_and_release(module, hold_seconds=0.01)
+        await asyncio.sleep(0.03)
+        assert module._pending_task is not None
+
+        await module.disable()
+        assert module.enabled is False
+        assert module._pending_task is None
 
     asyncio.run(scenario())
 
