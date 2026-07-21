@@ -24,6 +24,7 @@ modules:
     driver: 'mock'
     long_press_seconds: 1.0
     combo_window_seconds: 0.4
+    flags: ['press', 'release', 'click', 'double_click', 'multi_click', 'long_press']
 
   lcd:
     enabled: false
@@ -47,6 +48,7 @@ modules:
     pin: 22
     driver: 'mock'
     blink_interval_seconds: 0.3
+    reacts_to: ['press', 'release', 'click', 'double_click', 'multi_click', 'long_press']
 
   dht11:
     enabled: false
