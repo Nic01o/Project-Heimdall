@@ -56,8 +56,8 @@ python -m alarmclock.daemon
 Project-Heimdall/
 ├── alarmclock/
 │   ├── core/
-│   │   ├── alarm.py            # Alarm data model (Alarm, Weekday)
-│   │   ├── scheduler.py        # Alarm scheduling logic
+│   │   ├── alarm.py            # Sleep plan data model (SleepPlan, SleepPlanGroup, Weekday)
+│   │   ├── scheduler.py        # Sleep plan scheduling logic
 │   │   ├── event_bus.py        # Event pub/sub
 │   │   ├── config.py           # YAML config loading
 │   │   └── persistence.py      # JSON key/value store (JSONStore)
@@ -294,7 +294,7 @@ scheduler:
   timezone: 'Europe/Berlin'
 
 persistence:
-  path: 'data/state.json'    # JSON store for alarms + module settings; defaults to this if omitted
+  path: 'data/state.json'    # JSON store for the sleep plan + module settings; defaults to this if omitted
 
 modules:
   mymodule:
@@ -332,19 +332,40 @@ module has been `init()`'d) - a deliberate, singular exception to "modules
 only talk through the bus", since being the one cross-module control plane is
 its entire purpose.
 
+There is exactly **one** sleep plan (no arbitrary list of alarms): 1-7
+disjoint weekday groups, each with its own wake time (a weekday not in any
+group simply has no alarm), plus one-time exceptions and a pause switch.
+Editing a group's time always says whether the change is for the next
+wake-up only or permanent - see `SleepPlan`/`SleepPlanGroup` in
+`alarmclock/core/alarm.py` and the scheduling logic in
+`alarmclock/core/scheduler.py`.
+
 REST API (JSON):
 
 ```bash
-# List / create / delete alarms
-curl http://localhost:5000/alarms
-curl -X POST http://localhost:5000/alarms \
+# Read the whole plan
+curl http://localhost:5000/plan
+
+# Create a group covering Monday+Tuesday, or a single still-free day
+curl -X POST http://localhost:5000/plan/groups \
   -H 'Content-Type: application/json' \
-  -d '{"time": "07:00", "label": "Wake up"}'
-curl -X DELETE http://localhost:5000/alarms/<id>
+  -d '{"days": [0, 1], "time": "07:00"}'
+curl -X POST http://localhost:5000/plan/days/wednesday \
+  -d '{"time": "07:30", "permanent": true}'
+
+# Change a group's time - permanently, or just for its next occurrence
+curl -X POST http://localhost:5000/plan/groups/<id> -d '{"time": "07:15", "permanent": true}'
+curl -X POST http://localhost:5000/plan/groups/<id> -d '{"time": "09:00", "permanent": false}'
+
+# Delete a group (frees its days again)
+curl -X DELETE http://localhost:5000/plan/groups/<id>
+
+# Pause the whole plan (editing any group/day reactivates it)
+curl -X POST http://localhost:5000/plan/disable
 
 # Stop or snooze a ringing alarm
-curl -X POST http://localhost:5000/alarms/<id>/stop
-curl -X POST http://localhost:5000/alarms/<id>/snooze -d '{"minutes": 9}'
+curl -X POST http://localhost:5000/plan/stop
+curl -X POST http://localhost:5000/plan/snooze -d '{"minutes": 9}'
 
 # Modules: list, enable/disable, settings
 curl http://localhost:5000/modules
@@ -354,12 +375,15 @@ curl http://localhost:5000/modules/light/settings
 curl -X POST http://localhost:5000/modules/light/settings -d '{"brightness": 80}'
 ```
 
-Browser UI (`/ui/...`, classic HTML forms, no JS): `/ui/` lists alarms and
-modules with a new-alarm form and enable/disable buttons; `/ui/modules/<name>/settings`
-renders that module's settings form generically from its schema (see
-"`webui` Widget Rendering" above). These are separate routes from the JSON
-API above even though they call the same `Scheduler`/`Module` methods under
-the hood - it keeps the REST API a pure JSON contract.
+Browser UI (`/ui/...`, classic HTML forms, no JS): `/ui/` shows the sleep
+plan's groups and any still-free weekdays, each with a small form to set a
+new time (next-only or permanent) and a group delete button, a form to bundle
+free days into a new group, and global stop/snooze/deactivate controls;
+`/ui/modules/<name>/settings` renders that module's settings form generically
+from its schema (see "`webui` Widget Rendering" above). These are separate
+routes from the JSON API above even though they call the same
+`Scheduler`/`Module` methods under the hood - it keeps the REST API a pure
+JSON contract.
 
 ## Testing
 

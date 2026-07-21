@@ -1,4 +1,5 @@
-"""Alarm scheduler: computes due alarms and fires bus events. Hardware-independent."""
+"""Sleep-plan scheduler: computes the next due wake-up and fires bus events.
+Hardware-independent."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import logging
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from alarmclock.core.alarm import Alarm, Weekday
+from alarmclock.core.alarm import SleepPlan, SleepPlanGroup, Weekday
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.persistence import JSONStore
 
@@ -18,12 +19,12 @@ NowFn = Callable[[], datetime.datetime]
 
 
 class Scheduler:
-    """Waits for the next due alarm and emits `alarm.triggered` on the bus.
+    """Waits for the next due wake-up and emits `alarm.triggered` on the bus.
 
     Knows nothing about hardware. The clock (`now`) is injectable so the
     scheduling logic can be unit-tested without waiting on real time. If a
-    `store` is given, alarms are persisted under the "alarms" key on every
-    change and restored from it at construction time.
+    `store` is given, the plan is persisted under the "sleep_plan" key on
+    every change and restored from it at construction time.
     """
 
     def __init__(
@@ -38,72 +39,165 @@ class Scheduler:
         self.tz = ZoneInfo(timezone)
         self._now = now or (lambda: datetime.datetime.now(self.tz))
         self._store = store
-        self._alarms: dict[str, Alarm] = {}
+        self._plan = SleepPlan()
         self._task: asyncio.Task[None] | None = None
         self._changed = asyncio.Event()
 
         if self._store is not None:
-            for data in self._store.get("alarms", []):
-                alarm = Alarm.from_dict(data)
-                self._alarms[alarm.id] = alarm
+            data = self._store.get("sleep_plan")
+            if data is not None:
+                self._plan = SleepPlan.from_dict(data)
+        self._prune_stale_overrides()
 
     # -- persistence ---------------------------------------------------------
 
     def _persist(self) -> None:
         if self._store is not None:
-            self._store.set("alarms", [alarm.to_dict() for alarm in self._alarms.values()])
+            self._store.set("sleep_plan", self._plan.to_dict())
 
-    # -- alarm management --------------------------------------------------
+    # -- plan access -----------------------------------------------------------
 
-    def add_alarm(self, alarm: Alarm) -> Alarm:
-        self._alarms[alarm.id] = alarm
+    def get_plan(self) -> SleepPlan:
+        self._prune_stale_overrides()
+        return self._plan
+
+    def is_day_assigned(self, day: Weekday) -> bool:
+        return day in self._assigned_days()
+
+    def _time_for_day(self, plan: SleepPlan, day: Weekday) -> datetime.time | None:
+        for group in plan.groups:
+            if day in group.days:
+                return group.time
+        return None
+
+    def _find_group(self, group_id: str) -> SleepPlanGroup:
+        for group in self._plan.groups:
+            if group.id == group_id:
+                return group
+        raise ValueError(f"unknown sleep plan group {group_id!r}")
+
+    def _assigned_days(self) -> set[Weekday]:
+        assigned: set[Weekday] = set()
+        for group in self._plan.groups:
+            assigned |= group.days
+        return assigned
+
+    def _next_date_for_weekday(
+        self, day: Weekday, after: datetime.datetime, reference_time: datetime.time | None
+    ) -> datetime.date:
+        """Next calendar date `day` occurs on, at or after `after`. Today only
+        counts if `reference_time` (combined with today's date) is still
+        strictly ahead of `after`; if `reference_time` is None (a no-op skip
+        of an already-empty day) the exact date doesn't matter, so it just
+        rolls to next week for determinism."""
+        for offset in range(8):
+            candidate_date = (after + datetime.timedelta(days=offset)).date()
+            if Weekday(candidate_date.weekday()) != day:
+                continue
+            if reference_time is None:
+                return candidate_date
+            candidate_dt = datetime.datetime.combine(
+                candidate_date, reference_time, tzinfo=after.tzinfo
+            )
+            if candidate_dt > after:
+                return candidate_date
+        raise AssertionError("unreachable: a full week was scanned")
+
+    # -- plan management --------------------------------------------------
+
+    def create_group(self, days: frozenset[Weekday], time: datetime.time) -> SleepPlanGroup:
+        already_taken = days & self._assigned_days()
+        if already_taken:
+            names = ", ".join(day.name.capitalize() for day in sorted(already_taken))
+            raise ValueError(f"already assigned to a sleep plan: {names}")
+        group = SleepPlanGroup(days=frozenset(days), time=time)
+        self._plan.groups.append(group)
+        self._plan.enabled = True
         self._changed.set()
         self._persist()
-        return alarm
+        return group
 
-    def remove_alarm(self, alarm_id: str) -> None:
-        if self._alarms.pop(alarm_id, None) is not None:
-            self._changed.set()
-            self._persist()
+    def set_group_time(self, group_id: str, time: datetime.time, *, permanent: bool) -> None:
+        group = self._find_group(group_id)
+        if permanent:
+            group.time = time
+        else:
+            now = self._now()
+            target_date = min(
+                self._next_date_for_weekday(day, now, reference_time=time)
+                for day in group.days
+            )
+            self._plan.overrides[target_date] = time
+        self._plan.enabled = True
+        self._changed.set()
+        self._persist()
 
-    def get_alarm(self, alarm_id: str) -> Alarm | None:
-        return self._alarms.get(alarm_id)
+    def delete_group(self, group_id: str) -> None:
+        group = self._find_group(group_id)
+        self._plan.groups.remove(group)
+        self._changed.set()
+        self._persist()
 
-    def list_alarms(self) -> list[Alarm]:
-        return list(self._alarms.values())
+    def set_day_once(self, day: Weekday, time: datetime.time | None) -> None:
+        """Set (or clear) a one-time exception for a currently unassigned
+        weekday, without creating a permanent group."""
+        now = self._now()
+        reference_time = time if time is not None else self._time_for_day(self._plan, day)
+        target_date = self._next_date_for_weekday(day, now, reference_time=reference_time)
+        self._plan.overrides[target_date] = time
+        self._plan.enabled = True
+        self._changed.set()
+        self._persist()
+
+    def set_enabled(self, enabled: bool) -> None:
+        self._plan.enabled = enabled
+        self._changed.set()
+        self._persist()
 
     # -- trigger computation (pure, unit-testable) -------------------------
 
-    def next_trigger(self, alarm: Alarm, after: datetime.datetime) -> datetime.datetime | None:
-        """Next tz-aware datetime `alarm` fires strictly after `after`, or None."""
-        if not alarm.enabled:
+    def _next_weekly_occurrence(
+        self, plan: SleepPlan, after: datetime.datetime
+    ) -> datetime.datetime | None:
+        if not plan.enabled:
             return None
-        if alarm.is_one_shot:
-            assert alarm.at is not None
-            return alarm.at if alarm.at > after else None
+        # offset 0 is today (which may already be past its time), so scan
+        # through offset 7 (today + 1 week) to guarantee every weekday gets
+        # a second chance at its next occurrence.
+        for offset in range(8):
+            candidate_date = (after + datetime.timedelta(days=offset)).date()
+            if candidate_date in plan.overrides:
+                day_time = plan.overrides[candidate_date]
+            else:
+                day_time = self._time_for_day(plan, Weekday(candidate_date.weekday()))
+            if day_time is None:
+                continue
+            candidate_dt = datetime.datetime.combine(candidate_date, day_time, tzinfo=after.tzinfo)
+            if candidate_dt > after:
+                return candidate_dt
+        return None
 
-        assert alarm.time is not None
-        candidate = after.replace(
-            hour=alarm.time.hour, minute=alarm.time.minute, second=0, microsecond=0
-        )
-        if candidate <= after:
-            candidate += datetime.timedelta(days=1)
-        if not alarm.repeat:
-            return candidate
-        for _ in range(7):
-            if Weekday(candidate.weekday()) in alarm.repeat:
-                return candidate
-            candidate += datetime.timedelta(days=1)
-        return None  # repeat set was empty despite the check above; unreachable
+    def next_trigger(self, plan: SleepPlan, after: datetime.datetime) -> datetime.datetime | None:
+        """Next tz-aware datetime `plan` fires strictly after `after`, or None."""
+        candidates = [
+            trigger
+            for trigger in (plan.snooze_until, self._next_weekly_occurrence(plan, after))
+            if trigger is not None and trigger > after
+        ]
+        return min(candidates) if candidates else None
 
-    def _next_due(self) -> tuple[Alarm, datetime.datetime] | None:
-        now = self._now()
-        best: tuple[Alarm, datetime.datetime] | None = None
-        for alarm in self._alarms.values():
-            trigger = self.next_trigger(alarm, now)
-            if trigger is not None and (best is None or trigger < best[1]):
-                best = (alarm, trigger)
-        return best
+    def _prune_stale_overrides(self) -> None:
+        today = self._now().date()
+        stale = [date for date in self._plan.overrides if date < today]
+        if not stale:
+            return
+        for date in stale:
+            del self._plan.overrides[date]
+        self._persist()
+
+    def _next_due(self) -> datetime.datetime | None:
+        self._prune_stale_overrides()
+        return self.next_trigger(self._plan, self._now())
 
     # -- run loop ------------------------------------------------------------
 
@@ -124,40 +218,53 @@ class Scheduler:
     async def _run(self) -> None:
         while True:
             self._changed.clear()
-            due = self._next_due()
-            if due is None:
+            trigger = self._next_due()
+            if trigger is None:
                 await self._changed.wait()
                 continue
-            alarm, trigger = due
             delay = max((trigger - self._now()).total_seconds(), 0)
             try:
                 await asyncio.wait_for(self._changed.wait(), timeout=delay)
-                continue  # alarms were added/removed/changed, recompute
+                continue  # plan changed, recompute
             except asyncio.TimeoutError:
                 pass
-            await self._fire(alarm)
+            await self._fire(trigger)
 
-    async def _fire(self, alarm: Alarm) -> None:
-        logger.info("alarm %s triggered", alarm.id)
-        if alarm.is_one_shot:
-            self._alarms.pop(alarm.id, None)
-            self._persist()
-        await self.bus.emit("alarm.triggered", alarm.to_dict())
+    async def _fire(self, trigger: datetime.datetime) -> None:
+        logger.info("alarm triggered for %s", trigger)
+        if self._plan.snooze_until == trigger:
+            source = "snooze"
+            self._plan.snooze_until = None
+        elif trigger.date() in self._plan.overrides:
+            source = "override"
+            del self._plan.overrides[trigger.date()]
+        else:
+            source = "plan"
+        self._persist()
+        await self.bus.emit(
+            "alarm.triggered",
+            {"date": trigger.date().isoformat(), "time": trigger.time().isoformat(), "source": source},
+        )
 
     # -- ringing control, per the Wecker-Events TODO --------------------------
 
-    async def stop_alarm(self, alarm_id: str) -> None:
-        """Stop a currently ringing alarm (modules like sound listen for this)."""
-        await self.bus.emit("alarm.stopped", {"id": alarm_id})
+    async def stop_alarm(self) -> None:
+        """Stop a currently ringing alarm (modules like sound listen for
+        this). Also cancels a pending snooze, so a stopped alarm doesn't
+        quietly ring again a few minutes later."""
+        if self._plan.snooze_until is not None:
+            self._plan.snooze_until = None
+            self._changed.set()
+            self._persist()
+        await self.bus.emit("alarm.stopped", {})
 
-    async def snooze_alarm(self, alarm_id: str, minutes: int = 9) -> Alarm:
-        """Schedule a one-shot re-trigger `minutes` from now for `alarm_id`."""
-        original = self._alarms.get(alarm_id)
-        label = original.label if original else ""
-        snoozed = self.add_alarm(
-            Alarm(at=self._now() + datetime.timedelta(minutes=minutes), label=label)
-        )
+    async def snooze_alarm(self, minutes: float = 9) -> datetime.datetime:
+        """Ring again `minutes` from now."""
+        snoozed_until = self._now() + datetime.timedelta(minutes=minutes)
+        self._plan.snooze_until = snoozed_until
+        self._changed.set()
+        self._persist()
         await self.bus.emit(
-            "alarm.snoozed", {"id": alarm_id, "minutes": minutes, "new_id": snoozed.id}
+            "alarm.snoozed", {"minutes": minutes, "until": snoozed_until.isoformat()}
         )
-        return snoozed
+        return snoozed_until

@@ -1,4 +1,4 @@
-"""Alarm data model."""
+"""Sleep plan data model."""
 
 from __future__ import annotations
 
@@ -29,47 +29,73 @@ EVERY_DAY = frozenset(Weekday)
 
 
 @dataclasses.dataclass
-class Alarm:
-    """A recurring alarm (`time` + `repeat`) or a one-shot alarm (`at`).
+class SleepPlanGroup:
+    """A set of weekdays that share one wake time. Groups are disjoint: a
+    weekday belongs to at most one group at a time."""
 
-    Exactly one of `time` or `at` must be set; one-shots can't repeat.
-    """
-
-    time: datetime.time | None = None
-    at: datetime.datetime | None = None
-    label: str = ""
-    repeat: frozenset[Weekday] = dataclasses.field(default_factory=frozenset)
-    enabled: bool = True
+    days: frozenset[Weekday]
+    time: datetime.time
     id: str = dataclasses.field(default_factory=lambda: uuid.uuid4().hex)
 
     def __post_init__(self) -> None:
-        if (self.time is None) == (self.at is None):
-            raise ValueError("Alarm needs exactly one of `time` or `at`")
-        if self.at is not None and self.repeat:
-            raise ValueError("one-shot alarms (`at`) cannot repeat")
-
-    @property
-    def is_one_shot(self) -> bool:
-        return self.at is not None
+        if not self.days:
+            raise ValueError("SleepPlanGroup needs at least one weekday")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
-            "label": self.label,
-            "time": self.time.isoformat() if self.time else None,
-            "at": self.at.isoformat() if self.at else None,
-            "repeat": sorted(int(day) for day in self.repeat),
-            "enabled": self.enabled,
+            "days": sorted(int(day) for day in self.days),
+            "time": self.time.isoformat(),
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Alarm":
-        """Inverse of to_dict(), used to restore persisted alarms."""
+    def from_dict(cls, data: dict[str, Any]) -> "SleepPlanGroup":
         return cls(
-            time=datetime.time.fromisoformat(data["time"]) if data["time"] else None,
-            at=datetime.datetime.fromisoformat(data["at"]) if data["at"] else None,
-            label=data["label"],
-            repeat=frozenset(Weekday(day) for day in data["repeat"]),
-            enabled=data["enabled"],
+            days=frozenset(Weekday(day) for day in data["days"]),
+            time=datetime.time.fromisoformat(data["time"]),
             id=data["id"],
+        )
+
+
+@dataclasses.dataclass
+class SleepPlan:
+    """The single sleep schedule: 0-7 disjoint weekday groups, plus one-time
+    exceptions (`overrides`, keyed by concrete date - a `None` value means
+    "skip this one occurrence") and a transient `snooze_until`.
+    """
+
+    groups: list[SleepPlanGroup] = dataclasses.field(default_factory=list)
+    overrides: dict[datetime.date, datetime.time | None] = dataclasses.field(
+        default_factory=dict
+    )
+    enabled: bool = True
+    snooze_until: datetime.datetime | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "groups": [group.to_dict() for group in self.groups],
+            "overrides": {
+                date.isoformat(): (time.isoformat() if time else None)
+                for date, time in self.overrides.items()
+            },
+            "enabled": self.enabled,
+            "snooze_until": self.snooze_until.isoformat() if self.snooze_until else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SleepPlan":
+        return cls(
+            groups=[SleepPlanGroup.from_dict(group) for group in data.get("groups", [])],
+            overrides={
+                datetime.date.fromisoformat(date): (
+                    datetime.time.fromisoformat(time) if time else None
+                )
+                for date, time in data.get("overrides", {}).items()
+            },
+            enabled=data.get("enabled", True),
+            snooze_until=(
+                datetime.datetime.fromisoformat(data["snooze_until"])
+                if data.get("snooze_until")
+                else None
+            ),
         )

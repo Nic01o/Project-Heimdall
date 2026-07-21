@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from alarmclock.core.alarm import Alarm
+from alarmclock.core.alarm import Weekday
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.base import Module
@@ -57,54 +57,127 @@ def test_root_redirects_to_ui_index():
     assert response.headers["location"] == "/ui/"
 
 
-def test_ui_index_lists_alarms_and_modules():
+def test_ui_index_lists_groups_and_modules():
     client, scheduler, _webui, _dummy = make_client()
-    scheduler.add_alarm(Alarm(time=datetime.time(7, 0), label="Wake up"))
+    scheduler.create_group(frozenset({Weekday.MONDAY}), datetime.time(7, 0))
 
     response = client.get("/ui/")
     assert response.status_code == 200
-    assert "Wake up" in response.text
+    assert "Monday" in response.text
+    assert "07:00" in response.text
     assert "Dummy" in response.text
     assert "Settings" in response.text  # dummy has a non-empty schema
 
 
-def test_ui_create_recurring_alarm_redirects_and_persists():
+def test_ui_create_group_redirects_and_persists():
     client, scheduler, _webui, _dummy = make_client()
-    response = client.post(
-        "/ui/alarms", data={"time": "07:00", "label": "Wake up", "repeat": ["0", "2"]}
-    )
+    response = client.post("/ui/plan/groups", data={"time": "07:00", "days": ["0", "2"]})
     assert response.status_code == 303
     assert response.headers["location"] == "/ui/"
 
-    alarms = scheduler.list_alarms()
-    assert len(alarms) == 1
-    assert alarms[0].label == "Wake up"
-    assert sorted(int(day) for day in alarms[0].repeat) == [0, 2]
+    groups = scheduler.get_plan().groups
+    assert len(groups) == 1
+    assert sorted(int(day) for day in groups[0].days) == [0, 2]
 
 
-def test_ui_create_alarm_with_conflicting_fields_redirects_with_error():
+def test_ui_create_group_without_days_redirects_with_error():
     client, scheduler, _webui, _dummy = make_client()
+    response = client.post("/ui/plan/groups", data={"time": "07:00"})
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/ui/?error=")
+    assert scheduler.get_plan().groups == []
+
+
+def test_ui_change_group_permanent_vs_next():
+    client, scheduler, _webui, _dummy = make_client()
+    group = scheduler.create_group(frozenset({Weekday.MONDAY}), datetime.time(6, 30))
+
     response = client.post(
-        "/ui/alarms", data={"time": "07:00", "at": "2026-07-20T07:00", "label": "bad"}
+        "/ui/plan/change",
+        data={"group_id": group.id, "time": "07:00", "scope": "permanent"},
+    )
+    assert response.status_code == 303
+    assert scheduler.get_plan().groups[0].time == datetime.time(7, 0)
+
+    response = client.post(
+        "/ui/plan/change",
+        data={"group_id": group.id, "time": "09:00", "scope": "next"},
+    )
+    assert response.status_code == 303
+    assert scheduler.get_plan().groups[0].time == datetime.time(7, 0)
+    assert len(scheduler.get_plan().overrides) == 1
+
+
+def test_ui_change_unknown_group_redirects_with_error():
+    client, _scheduler, _webui, _dummy = make_client()
+    response = client.post(
+        "/ui/plan/change",
+        data={"group_id": "does-not-exist", "time": "07:00", "scope": "permanent"},
     )
     assert response.status_code == 303
     assert response.headers["location"].startswith("/ui/?error=")
-    assert scheduler.list_alarms() == []
 
 
-def test_ui_delete_alarm():
+def test_ui_delete_group():
     client, scheduler, _webui, _dummy = make_client()
-    alarm = scheduler.add_alarm(Alarm(time=datetime.time(7, 0)))
+    group = scheduler.create_group(frozenset({Weekday.MONDAY}), datetime.time(7, 0))
 
-    response = client.post(f"/ui/alarms/{alarm.id}/delete")
+    response = client.post(f"/ui/plan/groups/{group.id}/delete")
     assert response.status_code == 303
-    assert scheduler.get_alarm(alarm.id) is None
+    assert scheduler.get_plan().groups == []
 
 
-def test_ui_delete_unknown_alarm_returns_404():
+def test_ui_delete_unknown_group_redirects_with_error():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.post("/ui/alarms/does-not-exist/delete")
-    assert response.status_code == 404
+    response = client.post("/ui/plan/groups/does-not-exist/delete")
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/ui/?error=")
+
+
+def test_ui_set_free_day():
+    client, scheduler, _webui, _dummy = make_client()
+    response = client.post(
+        "/ui/plan/days/monday", data={"time": "07:00", "scope": "permanent"}
+    )
+    assert response.status_code == 303
+    groups = scheduler.get_plan().groups
+    assert len(groups) == 1
+
+
+def test_ui_set_already_assigned_day_redirects_with_error():
+    client, scheduler, _webui, _dummy = make_client()
+    client.post("/ui/plan/days/monday", data={"time": "07:00", "scope": "permanent"})
+    response = client.post(
+        "/ui/plan/days/monday", data={"time": "08:00", "scope": "next"}
+    )
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/ui/?error=")
+
+
+def test_ui_disable_and_reactivate_via_edit():
+    client, scheduler, _webui, _dummy = make_client()
+    group = scheduler.create_group(frozenset({Weekday.MONDAY}), datetime.time(7, 0))
+
+    response = client.post("/ui/plan/disable")
+    assert response.status_code == 303
+    assert scheduler.get_plan().enabled is False
+
+    response = client.post(
+        "/ui/plan/change",
+        data={"group_id": group.id, "time": "07:30", "scope": "permanent"},
+    )
+    assert response.status_code == 303
+    assert scheduler.get_plan().enabled is True
+
+
+def test_ui_stop_and_snooze():
+    client, scheduler, _webui, _dummy = make_client()
+    response = client.post("/ui/plan/stop")
+    assert response.status_code == 303
+
+    response = client.post("/ui/plan/snooze", data={"minutes": "5"})
+    assert response.status_code == 303
+    assert scheduler.get_plan().snooze_until is not None
 
 
 def test_ui_enable_and_disable_module():

@@ -1,15 +1,13 @@
-"""Tests for the webui REST-API module: alarms, module registry, and the
-settings pattern exposed over HTTP.
+"""Tests for the webui REST-API module: the sleep plan, module registry, and
+the settings pattern exposed over HTTP.
 """
 
 import asyncio
-import datetime
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
-from alarmclock.core.alarm import Alarm
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.base import Module
@@ -53,69 +51,126 @@ def make_client() -> tuple[TestClient, Scheduler, WebUIModule, DummyModule]:
     return TestClient(webui.app), scheduler, webui, dummy
 
 
-def test_list_alarms_empty():
+def test_get_plan_empty():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.get("/alarms")
+    response = client.get("/plan")
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json() == {
+        "groups": [],
+        "overrides": {},
+        "enabled": True,
+        "snooze_until": None,
+    }
 
 
-def test_create_recurring_alarm_and_list_it():
+def test_create_group_and_list_it():
     client, scheduler, _webui, _dummy = make_client()
-    response = client.post("/alarms", json={"time": "07:00", "label": "Wake up"})
+    response = client.post("/plan/groups", json={"days": [0, 1], "time": "06:30"})
     assert response.status_code == 200
     body = response.json()
-    assert body["time"] == "07:00:00"
-    assert body["label"] == "Wake up"
-    assert len(scheduler.list_alarms()) == 1
+    assert body["days"] == [0, 1]
+    assert body["time"] == "06:30:00"
 
-    listed = client.get("/alarms").json()
-    assert listed == [body]
+    listed = client.get("/plan").json()
+    assert listed["groups"] == [body]
 
 
-def test_create_one_shot_alarm():
+def test_create_group_rejects_already_assigned_day():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.post("/alarms", json={"at": "2026-07-20T07:00:00+00:00"})
-    assert response.status_code == 200
-    assert response.json()["at"] is not None
-
-
-def test_create_alarm_with_both_time_and_at_is_rejected():
-    client, _scheduler, _webui, _dummy = make_client()
-    response = client.post(
-        "/alarms", json={"time": "07:00", "at": "2026-07-20T07:00:00+00:00"}
-    )
+    client.post("/plan/groups", json={"days": [0], "time": "06:30"})
+    response = client.post("/plan/groups", json={"days": [0, 1], "time": "07:00"})
     assert response.status_code == 400
 
 
-def test_create_alarm_with_neither_time_nor_at_is_rejected():
-    client, _scheduler, _webui, _dummy = make_client()
-    response = client.post("/alarms", json={"label": "nothing"})
-    assert response.status_code == 400
-
-
-def test_delete_alarm():
+def test_update_group_permanent_and_next_only():
     client, scheduler, _webui, _dummy = make_client()
-    alarm = scheduler.add_alarm(Alarm(time=datetime.time(7, 0)))
+    group = client.post("/plan/groups", json={"days": [0], "time": "06:30"}).json()
 
-    response = client.delete(f"/alarms/{alarm.id}")
+    response = client.post(
+        f"/plan/groups/{group['id']}", json={"time": "07:00", "permanent": True}
+    )
     assert response.status_code == 200
-    assert scheduler.get_alarm(alarm.id) is None
+    assert response.json()["groups"][0]["time"] == "07:00:00"
+    assert response.json()["overrides"] == {}
+
+    response = client.post(
+        f"/plan/groups/{group['id']}", json={"time": "09:00", "permanent": False}
+    )
+    assert response.status_code == 200
+    assert response.json()["groups"][0]["time"] == "07:00:00"
+    assert len(response.json()["overrides"]) == 1
 
 
-def test_delete_unknown_alarm_returns_404():
+def test_update_unknown_group_returns_400():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.delete("/alarms/does-not-exist")
+    response = client.post("/plan/groups/does-not-exist", json={"time": "07:00"})
+    assert response.status_code == 400
+
+
+def test_delete_group_frees_its_days():
+    client, scheduler, _webui, _dummy = make_client()
+    group = client.post("/plan/groups", json={"days": [0], "time": "06:30"}).json()
+
+    response = client.delete(f"/plan/groups/{group['id']}")
+    assert response.status_code == 200
+    assert client.get("/plan").json()["groups"] == []
+
+
+def test_delete_unknown_group_returns_404():
+    client, _scheduler, _webui, _dummy = make_client()
+    response = client.delete("/plan/groups/does-not-exist")
     assert response.status_code == 404
 
 
-def test_snooze_alarm():
+def test_set_day_permanent_creates_solo_group():
     client, scheduler, _webui, _dummy = make_client()
-    alarm = scheduler.add_alarm(Alarm(time=datetime.time(7, 0)))
-
-    response = client.post(f"/alarms/{alarm.id}/snooze", json={"minutes": 5})
+    response = client.post("/plan/days/monday", json={"time": "07:00", "permanent": True})
     assert response.status_code == 200
-    assert response.json()["label"] == alarm.label
+    groups = response.json()["groups"]
+    assert len(groups) == 1
+    assert groups[0]["days"] == [0]
+    assert groups[0]["time"] == "07:00:00"
+
+
+def test_set_day_next_only_does_not_create_a_group():
+    client, scheduler, _webui, _dummy = make_client()
+    response = client.post("/plan/days/monday", json={"time": "08:00", "permanent": False})
+    assert response.status_code == 200
+    assert response.json()["groups"] == []
+    assert len(response.json()["overrides"]) == 1
+
+
+def test_set_day_already_assigned_returns_409():
+    client, _scheduler, _webui, _dummy = make_client()
+    client.post("/plan/days/monday", json={"time": "07:00", "permanent": True})
+    response = client.post("/plan/days/monday", json={"time": "08:00", "permanent": False})
+    assert response.status_code == 409
+
+
+def test_set_day_unknown_weekday_returns_404():
+    client, _scheduler, _webui, _dummy = make_client()
+    response = client.post("/plan/days/someday", json={"time": "07:00"})
+    assert response.status_code == 404
+
+
+def test_disable_plan():
+    client, scheduler, _webui, _dummy = make_client()
+    response = client.post("/plan/disable")
+    assert response.status_code == 200
+    assert scheduler.get_plan().enabled is False
+
+
+def test_stop_plan():
+    client, _scheduler, _webui, _dummy = make_client()
+    response = client.post("/plan/stop")
+    assert response.status_code == 200
+
+
+def test_snooze_plan():
+    client, scheduler, _webui, _dummy = make_client()
+    response = client.post("/plan/snooze", json={"minutes": 5})
+    assert response.status_code == 200
+    assert response.json()["snooze_until"] == scheduler.get_plan().snooze_until.isoformat()
 
 
 def test_list_modules_includes_webui_and_dummy():

@@ -2,9 +2,10 @@
 {% import "_widgets.html" as widgets %}
 {% block title %}{{ module.display_name or module.name }} settings{% endblock %}
 {% block content %}
-<h1>{{ module.display_name or module.name }} settings</h1>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
+<div class="card">
+<h1>{{ module.display_name or module.name }} settings</h1>
 <form method="post" action="/ui/modules/{{ module.name }}/settings">
   {% for key, field in schema.items() %}
     {{ widgets.render_field(key, field, values.get(key)) }}
@@ -13,6 +14,7 @@
   {% endfor %}
   {% if schema %}<button type="submit">Save</button>{% endif %}
 </form>
+</div>
 
 <p><a href="/ui/">&larr; back</a></p>
 {% endblock %}

@@ -1,75 +1,349 @@
+/* ---------------------------------------------------------------------
+   Alarm Clock UI — "sunrise" theme
+   Soft, warm colors evoking a gentle wake-up / early morning sky.
+   Same structure as before (nav, tables, forms) — styling only.
+   --------------------------------------------------------------------- */
+
+:root {
+  --bg-1: #fff6ec;
+  --bg-2: #ffe3d1;
+  --bg-3: #ffd3c2;
+  --card-bg: rgba(255, 255, 255, 0.72);
+  --card-border: rgba(255, 255, 255, 0.6);
+  --text: #4a3527;
+  --text-muted: #8a7362;
+  --accent: #ff8a5c;
+  --accent-2: #ffb08a;
+  --accent-strong: #f2673f;
+  --accent-soft-bg: #fff0e6;
+  --danger: #d97a6c;
+  --danger-bg: #fdeae6;
+  --success: #6fb98f;
+  --success-bg: #e9f6ee;
+  --border: #f0ddce;
+  --shadow: 0 8px 24px -12px rgba(210, 120, 70, 0.35);
+  --radius: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-1: #1c1830;
+    --bg-2: #2a1f3d;
+    --bg-3: #3c2542;
+    --card-bg: rgba(38, 30, 54, 0.65);
+    --card-border: rgba(255, 255, 255, 0.08);
+    --text: #f3e9ea;
+    --text-muted: #b9a9b8;
+    --accent: #ffab84;
+    --accent-2: #ff8a6a;
+    --accent-strong: #ffc09f;
+    --accent-soft-bg: rgba(255, 171, 132, 0.14);
+    --danger: #e59a90;
+    --danger-bg: rgba(229, 154, 144, 0.14);
+    --success: #8fd0ab;
+    --success-bg: rgba(143, 208, 171, 0.14);
+    --border: rgba(255, 255, 255, 0.1);
+    --shadow: 0 8px 28px -12px rgba(0, 0, 0, 0.55);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
 body {
-  font-family: system-ui, sans-serif;
+  font-family: "Segoe UI Rounded", "SF Pro Rounded", -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
   max-width: 60rem;
-  margin: 2rem auto;
-  padding: 0 1rem;
-  color: #1a1a1a;
-  background: #fff;
+  margin: 0 auto;
+  padding: 0 1.25rem 3rem;
+  color: var(--text);
+  background: linear-gradient(160deg, var(--bg-1) 0%, var(--bg-2) 45%, var(--bg-3) 100%)
+    fixed;
+  min-height: 100vh;
+  line-height: 1.5;
 }
 
 nav {
-  margin-bottom: 1.5rem;
-  font-weight: bold;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 -1.25rem 2rem;
+  padding: 1.25rem 1.25rem;
+  font-weight: 700;
+  font-size: 1.15rem;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: linear-gradient(180deg, var(--bg-1) 65%, transparent);
+  backdrop-filter: blur(6px);
 }
 
 nav a {
-  color: inherit;
+  color: var(--accent-strong);
   text-decoration: none;
 }
 
+nav a::before {
+  content: "\2600\FE0F  ";
+}
+
+nav .tagline {
+  font-weight: 400;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.5rem 1.75rem;
+  backdrop-filter: blur(10px);
+}
+
+h1, h2 {
+  margin-top: 0;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+h1 {
+  font-size: 1.4rem;
+  letter-spacing: 0.01em;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin-bottom: 1rem;
+}
+
 table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.5rem;
 }
 
 th, td {
   text-align: left;
-  padding: 0.4rem 0.6rem;
-  border-bottom: 1px solid #ddd;
+  padding: 0.65rem 0.75rem;
+}
+
+th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  border-bottom: 2px solid var(--border);
+}
+
+td {
+  border-bottom: 1px solid var(--border);
+}
+
+tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+tbody tr:hover {
+  background: var(--accent-soft-bg);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
 }
 
 form.inline {
   display: inline-block;
-  margin-right: 0.3rem;
+  margin: 0 0.3rem 0.3rem 0;
 }
 
 .field {
   display: block;
-  margin-bottom: 0.75rem;
+  margin-bottom: 1rem;
 }
 
 .field span {
   display: block;
   font-size: 0.85rem;
-  color: #555;
-  margin-bottom: 0.15rem;
+  color: var(--text-muted);
+  margin-bottom: 0.3rem;
+  font-weight: 600;
 }
 
 .error {
-  color: #b00020;
-  font-weight: bold;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+}
+
+.error::before {
+  content: "\26A0\FE0F  ";
+}
+
+.next-alarm {
+  font-size: 1.05rem;
+}
+
+details {
+  margin-top: 1.25rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--accent-strong);
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+summary::before {
+  content: "\25B8  ";
+}
+
+details[open] summary::before {
+  content: "\25BE  ";
+}
+
+details > *:not(summary) {
+  margin-top: 1rem;
 }
 
 fieldset {
-  margin-bottom: 1rem;
+  margin: 0 0 1.25rem;
+  padding: 0.9rem 1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+legend {
+  padding: 0 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+fieldset label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.2rem 0.6rem 0.2rem 0;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: var(--accent-soft-bg);
+  font-size: 0.9rem;
+}
+
+input, select {
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+}
+
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft-bg);
+}
+
+input[type="checkbox"], input[type="radio"] {
+  accent-color: var(--accent);
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+input[type="color"] {
+  padding: 0.2rem;
+  height: 2.4rem;
+}
+
+label {
+  cursor: pointer;
+}
+
+form > label {
+  display: block;
+  margin-bottom: 0.9rem;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+form > label input {
+  display: block;
+  margin-top: 0.3rem;
+  font-weight: 400;
+  color: var(--text);
+  width: 100%;
+  max-width: 20rem;
 }
 
 button {
   cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  border: none;
+  border-radius: 999px;
+  padding: 0.5rem 1.2rem;
+  box-shadow: 0 4px 14px -6px rgba(242, 103, 63, 0.55);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 
-@media (prefers-color-scheme: dark) {
-  body {
-    color: #eee;
-    background: #1a1a1a;
-  }
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px -6px rgba(242, 103, 63, 0.65);
+}
 
-  th, td {
-    border-bottom-color: #444;
-  }
+button:active {
+  transform: translateY(0);
+}
 
-  .field span {
-    color: #aaa;
-  }
+form[action$="/delete"] button {
+  background: var(--danger-bg);
+  color: var(--danger);
+  box-shadow: none;
+  border: 1px solid var(--danger);
+}
+
+form[action$="/disable"] button {
+  background: var(--danger-bg);
+  color: var(--danger);
+  box-shadow: none;
+  border: 1px solid var(--danger);
+}
+
+form[action$="/enable"] button {
+  background: var(--success-bg);
+  color: var(--success);
+  box-shadow: none;
+  border: 1px solid var(--success);
+}
+
+a {
+  color: var(--accent-strong);
 }

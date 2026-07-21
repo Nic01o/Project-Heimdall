@@ -24,7 +24,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from starlette.datastructures import FormData
 
-from alarmclock.core.alarm import Alarm, Weekday
+from alarmclock.core.alarm import Weekday
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.base import Module
 from alarmclock.modules.settings_types import FIELD_TYPES, SettingsValidationError
@@ -68,16 +68,37 @@ def _form_to_settings(form: FormData, schema: dict[str, dict[str, Any]]) -> dict
     return values
 
 
-class AlarmCreate(BaseModel):
-    time: str | None = None
-    at: datetime.datetime | None = None
-    label: str = ""
-    repeat: list[int] = []
-    enabled: bool = True
+def _overrides_by_weekday(
+    plan: Any,
+) -> dict[Weekday, tuple[datetime.date, datetime.time | None]]:
+    """Map each weekday to its earliest pending override, if any. Used to
+    annotate both group rows and free-day rows in the UI without duplicating
+    the plan's date bookkeeping in the template."""
+    by_weekday: dict[Weekday, tuple[datetime.date, datetime.time | None]] = {}
+    for date, time in plan.overrides.items():
+        weekday = Weekday(date.weekday())
+        if weekday not in by_weekday or date < by_weekday[weekday][0]:
+            by_weekday[weekday] = (date, time)
+    return by_weekday
+
+
+class GroupCreate(BaseModel):
+    days: list[int]
+    time: str
+
+
+class GroupTimeUpdate(BaseModel):
+    time: str
+    permanent: bool = True
+
+
+class DayTimeUpdate(BaseModel):
+    time: str
+    permanent: bool = True
 
 
 class SnoozeRequest(BaseModel):
-    minutes: int = 9
+    minutes: float = 9
 
 
 class WebUIModule(Module):
@@ -190,54 +211,84 @@ class WebUIModule(Module):
             raise HTTPException(status_code=404, detail=f"unknown module {name!r}")
         return module
 
-    def _get_existing_alarm(self, alarm_id: str) -> None:
-        if self._get_scheduler().get_alarm(alarm_id) is None:
-            raise HTTPException(status_code=404, detail=f"unknown alarm {alarm_id!r}")
+    def _get_weekday(self, day: str) -> Weekday:
+        try:
+            return Weekday[day.upper()]
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown weekday {day!r}") from None
+
+    def _require_free_day(self, scheduler: Scheduler, day: Weekday) -> None:
+        if scheduler.is_day_assigned(day):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{day.name.capitalize()} already belongs to a sleep plan group",
+            )
 
     def _register_routes(self) -> None:
         app = self.app
 
-        @app.get("/alarms")
-        async def list_alarms() -> list[dict[str, Any]]:
-            return [alarm.to_dict() for alarm in self._get_scheduler().list_alarms()]
+        @app.get("/plan")
+        async def get_plan() -> dict[str, Any]:
+            return self._get_scheduler().get_plan().to_dict()
 
-        @app.post("/alarms")
-        async def create_alarm(payload: AlarmCreate) -> dict[str, Any]:
+        @app.post("/plan/groups")
+        async def create_group(payload: GroupCreate) -> dict[str, Any]:
             scheduler = self._get_scheduler()
             try:
-                parsed_time = (
-                    datetime.time.fromisoformat(payload.time)
-                    if payload.time is not None
-                    else None
-                )
-                alarm = Alarm(
-                    time=parsed_time,
-                    at=payload.at,
-                    label=payload.label,
-                    repeat=frozenset(Weekday(day) for day in payload.repeat),
-                    enabled=payload.enabled,
-                )
+                days = frozenset(Weekday(day) for day in payload.days)
+                time = datetime.time.fromisoformat(payload.time)
+                group = scheduler.create_group(days, time)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return scheduler.add_alarm(alarm).to_dict()
+            return group.to_dict()
 
-        @app.delete("/alarms/{alarm_id}")
-        async def delete_alarm(alarm_id: str) -> dict[str, str]:
-            self._get_existing_alarm(alarm_id)
-            self._get_scheduler().remove_alarm(alarm_id)
+        @app.post("/plan/groups/{group_id}")
+        async def update_group(group_id: str, payload: GroupTimeUpdate) -> dict[str, Any]:
+            scheduler = self._get_scheduler()
+            try:
+                time = datetime.time.fromisoformat(payload.time)
+                scheduler.set_group_time(group_id, time, permanent=payload.permanent)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return scheduler.get_plan().to_dict()
+
+        @app.delete("/plan/groups/{group_id}")
+        async def remove_group(group_id: str) -> dict[str, str]:
+            try:
+                self._get_scheduler().delete_group(group_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
             return {"status": "ok"}
 
-        @app.post("/alarms/{alarm_id}/stop")
-        async def stop_alarm(alarm_id: str) -> dict[str, str]:
-            self._get_existing_alarm(alarm_id)
-            await self._get_scheduler().stop_alarm(alarm_id)
+        @app.post("/plan/days/{day}")
+        async def set_day(day: str, payload: DayTimeUpdate) -> dict[str, Any]:
+            scheduler = self._get_scheduler()
+            weekday = self._get_weekday(day)
+            self._require_free_day(scheduler, weekday)
+            try:
+                time = datetime.time.fromisoformat(payload.time)
+                if payload.permanent:
+                    scheduler.create_group(frozenset({weekday}), time)
+                else:
+                    scheduler.set_day_once(weekday, time)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return scheduler.get_plan().to_dict()
+
+        @app.post("/plan/disable")
+        async def disable_plan() -> dict[str, str]:
+            self._get_scheduler().set_enabled(False)
             return {"status": "ok"}
 
-        @app.post("/alarms/{alarm_id}/snooze")
-        async def snooze_alarm(alarm_id: str, payload: SnoozeRequest) -> dict[str, Any]:
-            self._get_existing_alarm(alarm_id)
-            snoozed = await self._get_scheduler().snooze_alarm(alarm_id, payload.minutes)
-            return snoozed.to_dict()
+        @app.post("/plan/stop")
+        async def stop_plan() -> dict[str, str]:
+            await self._get_scheduler().stop_alarm()
+            return {"status": "ok"}
+
+        @app.post("/plan/snooze")
+        async def snooze_plan(payload: SnoozeRequest) -> dict[str, Any]:
+            until = await self._get_scheduler().snooze_alarm(payload.minutes)
+            return {"snooze_until": until.isoformat()}
 
         @app.get("/modules")
         async def list_modules() -> list[dict[str, Any]]:
@@ -293,7 +344,47 @@ class WebUIModule(Module):
         @app.get("/ui/", include_in_schema=False)
         async def ui_index(request: Request, error: str | None = None):
             scheduler = self._get_scheduler()
-            alarms = [alarm.to_dict() for alarm in scheduler.list_alarms()]
+            plan = scheduler.get_plan()
+            overrides_by_weekday = _overrides_by_weekday(plan)
+
+            groups = []
+            for group in plan.groups:
+                sorted_days = sorted(group.days, key=lambda d: d.value)
+                groups.append(
+                    {
+                        "id": group.id,
+                        "days": sorted_days,
+                        "time": group.time,
+                        "overrides": [
+                            (day, *overrides_by_weekday[day])
+                            for day in sorted_days
+                            if day in overrides_by_weekday
+                        ],
+                    }
+                )
+
+            assigned_days = {day for group in plan.groups for day in group.days}
+            free_days = [
+                {"day": day, "override": overrides_by_weekday.get(day)}
+                for day in Weekday
+                if day not in assigned_days
+            ]
+
+            next_trigger = scheduler.next_trigger(plan, datetime.datetime.now(scheduler.tz))
+            next_alarm = None
+            next_group_id = None
+            if next_trigger is not None:
+                next_weekday = Weekday(next_trigger.weekday())
+                owning_group = next(
+                    (group for group in plan.groups if next_weekday in group.days), None
+                )
+                next_alarm = {
+                    "weekday": next_weekday.name.capitalize(),
+                    "date": next_trigger.date(),
+                    "time": next_trigger.time(),
+                }
+                next_group_id = owning_group.id if owning_group is not None else None
+
             modules = []
             for module in self._modules.values():
                 schema = await module.get_settings_schema()
@@ -309,55 +400,85 @@ class WebUIModule(Module):
                 request,
                 "index.html",
                 {
-                    "alarms": alarms,
+                    "plan": plan,
+                    "groups": groups,
+                    "free_days": free_days,
+                    "next_alarm": next_alarm,
+                    "next_group_id": next_group_id,
                     "modules": modules,
-                    "weekdays": list(Weekday),
                     "error": error,
                 },
             )
 
-        @app.post("/ui/alarms", include_in_schema=False)
-        async def ui_create_alarm(
-            time: str = Form(""),
-            at: str = Form(""),
-            label: str = Form(""),
-            repeat: list[str] = Form([]),
+        @app.post("/ui/plan/groups", include_in_schema=False)
+        async def ui_create_group(
+            time: str = Form(""), days: list[str] = Form([])
         ) -> RedirectResponse:
             scheduler = self._get_scheduler()
             try:
-                parsed_time = datetime.time.fromisoformat(time) if time else None
-                parsed_at = (
-                    datetime.datetime.fromisoformat(at).replace(tzinfo=scheduler.tz)
-                    if at
-                    else None
-                )
-                alarm = Alarm(
-                    time=parsed_time,
-                    at=parsed_at,
-                    label=label,
-                    repeat=frozenset(Weekday(int(day)) for day in repeat),
-                )
+                if not days:
+                    raise ValueError("select at least one day")
+                parsed_days = frozenset(Weekday(int(day)) for day in days)
+                parsed_time = datetime.time.fromisoformat(time)
+                scheduler.create_group(parsed_days, parsed_time)
             except ValueError as exc:
                 return RedirectResponse(f"/ui/?error={exc}", status_code=303)
-            scheduler.add_alarm(alarm)
             return RedirectResponse("/ui/", status_code=303)
 
-        @app.post("/ui/alarms/{alarm_id}/delete", include_in_schema=False)
-        async def ui_delete_alarm(alarm_id: str) -> RedirectResponse:
-            self._get_existing_alarm(alarm_id)
-            self._get_scheduler().remove_alarm(alarm_id)
+        @app.post("/ui/plan/change", include_in_schema=False)
+        async def ui_change_group(
+            group_id: str = Form(""), time: str = Form(""), scope: str = Form("next")
+        ) -> RedirectResponse:
+            scheduler = self._get_scheduler()
+            try:
+                parsed_time = datetime.time.fromisoformat(time)
+                scheduler.set_group_time(group_id, parsed_time, permanent=(scope == "permanent"))
+            except ValueError as exc:
+                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
             return RedirectResponse("/ui/", status_code=303)
 
-        @app.post("/ui/alarms/{alarm_id}/stop", include_in_schema=False)
-        async def ui_stop_alarm(alarm_id: str) -> RedirectResponse:
-            self._get_existing_alarm(alarm_id)
-            await self._get_scheduler().stop_alarm(alarm_id)
+        @app.post("/ui/plan/groups/{group_id}/delete", include_in_schema=False)
+        async def ui_delete_group(group_id: str) -> RedirectResponse:
+            try:
+                self._get_scheduler().delete_group(group_id)
+            except ValueError as exc:
+                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
             return RedirectResponse("/ui/", status_code=303)
 
-        @app.post("/ui/alarms/{alarm_id}/snooze", include_in_schema=False)
-        async def ui_snooze_alarm(alarm_id: str, minutes: int = Form(9)) -> RedirectResponse:
-            self._get_existing_alarm(alarm_id)
-            await self._get_scheduler().snooze_alarm(alarm_id, minutes)
+        @app.post("/ui/plan/days/{day}", include_in_schema=False)
+        async def ui_set_day(
+            day: str, time: str = Form(""), scope: str = Form("next")
+        ) -> RedirectResponse:
+            scheduler = self._get_scheduler()
+            weekday = self._get_weekday(day)
+            if scheduler.is_day_assigned(weekday):
+                return RedirectResponse(
+                    f"/ui/?error={weekday.name.capitalize()} already belongs to a sleep plan group",
+                    status_code=303,
+                )
+            try:
+                parsed_time = datetime.time.fromisoformat(time)
+                if scope == "permanent":
+                    scheduler.create_group(frozenset({weekday}), parsed_time)
+                else:
+                    scheduler.set_day_once(weekday, parsed_time)
+            except ValueError as exc:
+                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
+            return RedirectResponse("/ui/", status_code=303)
+
+        @app.post("/ui/plan/disable", include_in_schema=False)
+        async def ui_disable_plan() -> RedirectResponse:
+            self._get_scheduler().set_enabled(False)
+            return RedirectResponse("/ui/", status_code=303)
+
+        @app.post("/ui/plan/stop", include_in_schema=False)
+        async def ui_stop_plan() -> RedirectResponse:
+            await self._get_scheduler().stop_alarm()
+            return RedirectResponse("/ui/", status_code=303)
+
+        @app.post("/ui/plan/snooze", include_in_schema=False)
+        async def ui_snooze_plan(minutes: float = Form(9)) -> RedirectResponse:
+            await self._get_scheduler().snooze_alarm(minutes)
             return RedirectResponse("/ui/", status_code=303)
 
         @app.post("/ui/modules/{name}/enable", include_in_schema=False)

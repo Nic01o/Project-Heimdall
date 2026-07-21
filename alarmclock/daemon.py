@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import datetime
 import importlib
 import logging
 import signal
 from pathlib import Path
 from typing import Any
 
-from alarmclock.core.alarm import Alarm
 from alarmclock.core.config import load_config
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.persistence import JSONStore
@@ -90,11 +88,8 @@ async def run(cfg_path: Path, demo_alarm_seconds: int | None) -> None:
     modules = await _load_modules(cfg, bus, scheduler, store)
 
     if demo_alarm_seconds is not None:
-        now = datetime.datetime.now(scheduler.tz)
-        alarm = scheduler.add_alarm(
-            Alarm(at=now + datetime.timedelta(seconds=demo_alarm_seconds), label="demo")
-        )
-        logger.info("demo alarm %s scheduled for %s", alarm.id, alarm.at)
+        until = await scheduler.snooze_alarm(minutes=demo_alarm_seconds / 60)
+        logger.info("demo alarm scheduled via snooze for %s", until)
 
     await scheduler.start()
     logger.info("daemon started, waiting for alarms (Ctrl+C to stop)")
@@ -121,9 +116,16 @@ def main() -> None:
         default=None,
         help="Schedule a one-shot demo alarm this many seconds after startup",
     )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Root log level, e.g. DEBUG, INFO (DEBUG also traces every event bus emit)",
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=args.log_level.upper(), format="%(asctime)s %(name)s %(levelname)s %(message)s"
+    )
     asyncio.run(run(args.config, args.demo_alarm_seconds))
 
 

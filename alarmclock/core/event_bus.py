@@ -74,4 +74,5 @@ class EventBus:
         self._transport.unsubscribe(event, handler)
 
     async def emit(self, event: str, payload: dict[str, Any] | None = None) -> None:
+        logger.debug("emit %s: %s", event, payload or {})
         await self._transport.publish(event, payload or {})

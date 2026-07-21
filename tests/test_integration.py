@@ -6,9 +6,7 @@ exactly as the daemon does, fires an alarm, and confirms the module reacts to
 """
 
 import asyncio
-import datetime
 
-from alarmclock.core.alarm import Alarm
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.mymodule.mymodule import MyModule
@@ -30,9 +28,9 @@ def test_core_to_bus_to_module_round_trip():
 
         bus.subscribe("mymodule.action_done", on_action_done)
 
-        alarm = scheduler.add_alarm(
-            Alarm(at=datetime.datetime.now(scheduler.tz) + datetime.timedelta(milliseconds=50))
-        )
+        # "ring" 50ms from now via the snooze mechanism - a one-time trigger
+        # independent of any weekly sleep-plan group.
+        await scheduler.snooze_alarm(minutes=50 / 60000)
 
         await scheduler.start()
         await asyncio.sleep(0.2)
@@ -41,6 +39,6 @@ def test_core_to_bus_to_module_round_trip():
         assert module.enabled is True
         assert len(action_done_events) == 1
         assert action_done_events[0] == {"status": "ok"}
-        assert scheduler.get_alarm(alarm.id) is None  # one-shot removed after firing
+        assert scheduler.get_plan().snooze_until is None  # cleared after firing
 
     asyncio.run(scenario())
