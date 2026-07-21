@@ -1,7 +1,8 @@
 """Tests for the button module: InputModule base behavior (pin, settings
 schema, poll loop + edge detection), the button.pressed/button.released
-events, the button.long_press/button.combo gestures derived from them, and
-both the mock and real (GPIO-mocked) button drivers.
+events, the button.long_press/button.combo gestures derived from them, the
+generic button.flag events those gestures are normalized into, and both the
+mock and real (GPIO-mocked) button drivers.
 """
 
 import asyncio
@@ -11,6 +12,7 @@ import types
 from alarmclock.core.event_bus import EventBus
 from alarmclock.modules.button.button import ButtonModule
 from alarmclock.modules.button.mock import MockButtonDriver
+from alarmclock.modules.flags import BUTTON_FLAGS
 
 
 def make_module(**extra_settings) -> ButtonModule:
@@ -43,6 +45,16 @@ def test_settings_schema_has_pattern_thresholds():
         schema = await module.get_settings_schema()
         assert schema["long_press_seconds"]["type"] == "float"
         assert schema["combo_window_seconds"]["type"] == "float"
+
+    asyncio.run(scenario())
+
+
+def test_settings_schema_has_flags_multiselect():
+    async def scenario():
+        module = make_module()
+        schema = await module.get_settings_schema()
+        assert schema["flags"]["type"] == "multiselect"
+        assert schema["flags"]["options"] == BUTTON_FLAGS
 
     asyncio.run(scenario())
 
@@ -254,6 +266,115 @@ def test_long_press_emits_long_press_not_combo():
         assert long_presses[0]["name"] == "button"
         assert long_presses[0]["pin"] == 27
         assert long_presses[0]["duration"] >= 0.05
+
+    asyncio.run(scenario())
+
+
+def test_press_and_release_emit_press_and_release_flags():
+    async def scenario():
+        bus = EventBus()
+        module = ButtonModule("button", bus, {"pin": 27})
+        module.poll_interval = 0.01
+        await module.init()
+
+        flags = []
+
+        async def on_flag(payload):
+            flags.append(payload)
+
+        bus.subscribe("button.flag", on_flag)
+
+        await module.enable()
+        module._driver.press()
+        await asyncio.sleep(0.03)
+        module._driver.release()
+        await asyncio.sleep(0.03)
+        await module.disable()
+
+        assert {"name": "button", "pin": 27, "flag": "press"} in flags
+        assert {"name": "button", "pin": 27, "flag": "release"} in flags
+
+    asyncio.run(scenario())
+
+
+def test_click_double_click_and_multi_click_emit_matching_flags():
+    async def scenario(presses, expected_flag):
+        bus = EventBus()
+        module = ButtonModule("button", bus, {"pin": 27, "combo_window_seconds": 0.03})
+        module.poll_interval = 0.01
+        await module.init()
+
+        flags = []
+
+        async def on_flag(payload):
+            if payload["flag"] != "press" and payload["flag"] != "release":
+                flags.append(payload["flag"])
+
+        bus.subscribe("button.flag", on_flag)
+
+        await module.enable()
+        for _ in range(presses):
+            await press_and_release(module, hold_seconds=0.01)
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.06)
+        await module.disable()
+
+        assert flags == [expected_flag]
+
+    asyncio.run(scenario(1, "click"))
+    asyncio.run(scenario(2, "double_click"))
+    asyncio.run(scenario(3, "multi_click"))
+
+
+def test_long_press_emits_long_press_flag():
+    async def scenario():
+        bus = EventBus()
+        module = ButtonModule(
+            "button", bus, {"pin": 27, "combo_window_seconds": 0.03, "long_press_seconds": 0.05}
+        )
+        module.poll_interval = 0.01
+        await module.init()
+
+        flags = []
+
+        async def on_flag(payload):
+            flags.append(payload["flag"])
+
+        bus.subscribe("button.flag", on_flag)
+
+        await module.enable()
+        await press_and_release(module, hold_seconds=0.08)
+        await asyncio.sleep(0.05)
+        await module.disable()
+
+        assert "long_press" in flags
+        assert "click" not in flags
+
+    asyncio.run(scenario())
+
+
+def test_flags_setting_filters_which_flags_are_sent():
+    async def scenario():
+        bus = EventBus()
+        module = ButtonModule("button", bus, {"pin": 27, "flags": ["long_press"]})
+        module.poll_interval = 0.01
+        await module.init()
+
+        flags = []
+
+        async def on_flag(payload):
+            flags.append(payload["flag"])
+
+        bus.subscribe("button.flag", on_flag)
+
+        await module.enable()
+        module._driver.press()
+        await asyncio.sleep(0.03)
+        module._driver.release()
+        await asyncio.sleep(0.05)
+        await module.disable()
+
+        assert flags == []  # "press"/"release"/"click" excluded by the flags setting
 
     asyncio.run(scenario())
 

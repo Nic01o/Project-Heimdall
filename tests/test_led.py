@@ -1,7 +1,7 @@
 """Tests for the LED module: OutputModule base behavior (pin, settings
 schema, safe disable), the alarm.triggered/alarm.stopped/alarm.snoozed and
-button.pressed/button.released wiring, and both the mock and real
-(GPIO-mocked) LED drivers.
+button.flag wiring (including the reacts_to filter and per-flag reaction
+patterns), and both the mock and real (GPIO-mocked) LED drivers.
 """
 
 import asyncio
@@ -9,6 +9,7 @@ import sys
 import types
 
 from alarmclock.core.event_bus import EventBus
+from alarmclock.modules.flags import BUTTON_FLAGS
 from alarmclock.modules.led.led import LEDModule
 from alarmclock.modules.led.mock import MockLEDDriver
 
@@ -26,6 +27,8 @@ def test_settings_schema_includes_pin_driver_and_blink_interval():
         assert schema["driver"]["type"] == "select"
         assert schema["driver"]["options"] == ["mock", "real"]
         assert schema["blink_interval_seconds"]["type"] == "float"
+        assert schema["reacts_to"]["type"] == "multiselect"
+        assert schema["reacts_to"]["options"] == BUTTON_FLAGS
 
     asyncio.run(scenario())
 
@@ -92,17 +95,17 @@ def test_alarm_snoozed_flashes_twice_then_off():
     asyncio.run(scenario())
 
 
-def test_button_press_lights_led_while_idle():
+def test_button_press_flag_lights_led_while_idle():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus, {"pin": 22})
         await module.init()
         await module.enable()
 
-        await bus.emit("button.pressed", {"name": "button", "pin": 27})
+        await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": "press"})
         assert module._driver.is_on is True
 
-        await bus.emit("button.released", {"name": "button", "pin": 27})
+        await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": "release"})
         assert module._driver.is_on is False
 
         await module.disable()
@@ -110,7 +113,7 @@ def test_button_press_lights_led_while_idle():
     asyncio.run(scenario())
 
 
-def test_button_press_does_not_override_alarm_blink():
+def test_button_press_flag_does_not_override_alarm_blink():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus, {"pin": 22, "blink_interval_seconds": 0.05})
@@ -118,9 +121,73 @@ def test_button_press_does_not_override_alarm_blink():
         await module.enable()
 
         await bus.emit("alarm.triggered", {"id": "a1"})
-        await bus.emit("button.pressed", {"name": "button", "pin": 27})
+        await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": "press"})
 
         assert module._blink_task is not None
+
+        await module.disable()
+
+    asyncio.run(scenario())
+
+
+def test_click_flag_flashes_once():
+    async def scenario():
+        bus = EventBus()
+        module = LEDModule("led", bus, {"pin": 22})
+        await module.init()
+        await module.enable()
+
+        flashes = []
+        original_flash = module._flash
+
+        async def counting_flash(times):
+            flashes.append(times)
+            await original_flash(times)
+
+        module._flash = counting_flash
+
+        await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": "click"})
+        assert flashes == [1]
+        assert module._driver.is_on is False  # ends off
+
+        await module.disable()
+
+    asyncio.run(scenario())
+
+
+def test_different_flags_flash_different_counts():
+    async def scenario():
+        bus = EventBus()
+        module = LEDModule("led", bus, {"pin": 22})
+        await module.init()
+        await module.enable()
+
+        flashes = []
+
+        async def counting_flash(times):
+            flashes.append(times)
+
+        module._flash = counting_flash
+
+        for flag in ("double_click", "multi_click", "long_press"):
+            await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": flag})
+
+        assert flashes == [2, 3, 4]
+
+        await module.disable()
+
+    asyncio.run(scenario())
+
+
+def test_reacts_to_filters_out_unselected_flags():
+    async def scenario():
+        bus = EventBus()
+        module = LEDModule("led", bus, {"pin": 22, "reacts_to": ["long_press"]})
+        await module.init()
+        await module.enable()
+
+        await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": "press"})
+        assert module._driver.is_on is False  # "press" not in reacts_to, ignored
 
         await module.disable()
 
@@ -149,10 +216,10 @@ def test_on_event_dispatches_like_the_bus_subscriptions():
         module = make_module()
         await module.init()
 
-        await module.on_event("button.pressed", {"name": "button", "pin": 27})
+        await module.on_event("button.flag", {"name": "button", "pin": 27, "flag": "press"})
         assert module._driver.is_on is True
 
-        await module.on_event("button.released", {"name": "button", "pin": 27})
+        await module.on_event("button.flag", {"name": "button", "pin": 27, "flag": "release"})
         assert module._driver.is_on is False
 
     asyncio.run(scenario())

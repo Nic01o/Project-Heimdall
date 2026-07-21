@@ -12,9 +12,20 @@ other buttons never interfere since each has its own pattern state:
   price of being able to tell "1 click" from "the first of 2").
 
 `button.long_press` and `button.combo` are mutually exclusive per press+
-release cycle. Real hardware access lives behind a driver picked via the
-"driver" setting - "mock" (default, safe everywhere) or "real" (actual
-Raspberry Pi GPIO).
+release cycle.
+
+In addition to those raw events, every gesture is normalized into one of
+the shared `flags.BUTTON_FLAGS` ("press", "release", "click",
+"double_click", "multi_click", "long_press") and re-emitted as a generic
+`button.flag` {"name", "pin", "flag"} event. This is what lets an output
+module like led react to a *selection* of button gestures without knowing
+button-specific event names - see the `flags` setting below, and led's
+`reacts_to` setting, which is populated from the same vocabulary. Which
+flags actually get sent is itself configurable via the `flags` setting
+(default: all of them) - this is the "linking" the settings UI exposes.
+
+Real hardware access lives behind a driver picked via the "driver" setting -
+"mock" (default, safe everywhere) or "real" (actual Raspberry Pi GPIO).
 """
 
 from __future__ import annotations
@@ -24,6 +35,7 @@ import time
 from typing import Any
 
 from alarmclock.modules.base import InputModule
+from alarmclock.modules.flags import BUTTON_FLAGS
 
 DEFAULT_LONG_PRESS_SECONDS = 1.0
 DEFAULT_COMBO_WINDOW_SECONDS = 0.4
@@ -55,11 +67,19 @@ class ButtonModule(InputModule):
         self.logger.info("button pressed (pin %s)", self.pin)
         self._pressed_at = time.monotonic()
         await self.bus.emit("button.pressed", {"name": self.name, "pin": self.pin})
+        await self._emit_flag("press")
 
     async def _on_deactivated(self) -> None:
         self.logger.info("button released (pin %s)", self.pin)
         await self.bus.emit("button.released", {"name": self.name, "pin": self.pin})
+        await self._emit_flag("release")
         await self._register_release()
+
+    async def _emit_flag(self, flag: str) -> None:
+        """Re-emit a gesture as the generic `button.flag` event, but only if
+        it's one of the flags this button is configured to send."""
+        if flag in self.settings.get("flags", BUTTON_FLAGS):
+            await self.bus.emit("button.flag", {"name": self.name, "pin": self.pin, "flag": flag})
 
     async def _register_release(self) -> None:
         pressed_at = self._pressed_at
@@ -73,6 +93,7 @@ class ButtonModule(InputModule):
             await self.bus.emit(
                 "button.long_press", {"name": self.name, "pin": self.pin, "duration": duration}
             )
+            await self._emit_flag("long_press")
             return
 
         await self._register_short_press()
@@ -95,6 +116,8 @@ class ButtonModule(InputModule):
         self._pending_task = None
         if count:
             await self.bus.emit("button.combo", {"name": self.name, "pin": self.pin, "count": count})
+            flag = "click" if count == 1 else "double_click" if count == 2 else "multi_click"
+            await self._emit_flag(flag)
 
     async def disable(self) -> None:
         if self._pending_task is not None:
@@ -123,5 +146,10 @@ class ButtonModule(InputModule):
             "min": 0.1,
             "max": 3,
             "label": "Combo window (s)",
+        }
+        schema["flags"] = {
+            "type": "multiselect",
+            "options": BUTTON_FLAGS,
+            "label": "Flags to send",
         }
         return schema
