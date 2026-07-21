@@ -11,14 +11,17 @@ settings changes over HTTP, so it necessarily knows about the other modules.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import datetime
 import logging
+import secrets
 from pathlib import Path
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -66,6 +69,22 @@ def _form_to_settings(form: FormData, schema: dict[str, dict[str, Any]]) -> dict
             else:
                 values[key] = raw
     return values
+
+
+def _check_basic_auth(header: str | None, username: str, password: str) -> bool:
+    """Constant-time check of a `Basic` Authorization header against the
+    configured credentials. secrets.compare_digest on both parts avoids
+    leaking their length/prefix through timing."""
+    if header is None or not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header[len("Basic ") :]).decode("utf-8")
+        given_user, _, given_password = decoded.partition(":")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    return secrets.compare_digest(given_user, username) and secrets.compare_digest(
+        given_password, password
+    )
 
 
 def _overrides_by_weekday(
@@ -123,6 +142,7 @@ class WebUIModule(Module):
         self.app = FastAPI(title="Alarm Clock")
         self.app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
         self._templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+        self._register_auth()
         self._register_routes()
         self._register_ui_routes()
 
@@ -196,6 +216,11 @@ class WebUIModule(Module):
         return {
             "host": {"type": "string", "label": "Host"},
             "port": {"type": "int", "min": 1, "max": 65535, "label": "Port"},
+            "username": {"type": "string", "label": "Username"},
+            "password": {
+                "type": "password",
+                "label": "Password (empty disables the login prompt)",
+            },
         }
 
     # -- helpers used by routes ---------------------------------------------
@@ -223,6 +248,24 @@ class WebUIModule(Module):
                 status_code=409,
                 detail=f"{day.name.capitalize()} already belongs to a sleep plan group",
             )
+
+    def _register_auth(self) -> None:
+        """Gate every request behind HTTP Basic Auth when a password is
+        configured. Applies to the JSON API and the /ui pages alike since
+        both are served from the same app - there's no route that should be
+        reachable without it once a password is set. No password configured
+        (the default) means no login prompt, so existing installs aren't
+        locked out."""
+
+        @self.app.middleware("http")
+        async def require_auth(request: Request, call_next):
+            password = self.settings.get("password", "")
+            if not password:
+                return await call_next(request)
+            username = self.settings.get("username", "admin")
+            if _check_basic_auth(request.headers.get("authorization"), username, password):
+                return await call_next(request)
+            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Alarm Clock"'})
 
     def _register_routes(self) -> None:
         app = self.app

@@ -3,6 +3,7 @@ the settings pattern exposed over HTTP.
 """
 
 import asyncio
+import base64
 from typing import Any
 
 import pytest
@@ -40,6 +41,11 @@ class DummyModule(Module):
 
     async def get_settings_schema(self) -> dict:
         return DUMMY_SCHEMA
+
+
+def _basic_auth_header(username: str, password: str) -> dict[str, str]:
+    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
 
 
 def make_client() -> tuple[TestClient, Scheduler, WebUIModule, DummyModule]:
@@ -244,6 +250,68 @@ def test_webui_enable_and_disable_lifecycle_starts_and_stops_server_task():
         assert task.done()
 
     asyncio.run(scenario())
+
+
+def test_no_password_set_allows_requests_without_credentials():
+    client, _scheduler, _webui, _dummy = make_client()
+    response = client.get("/plan")
+    assert response.status_code == 200
+
+
+def test_password_set_rejects_requests_without_credentials():
+    bus = EventBus()
+    scheduler = Scheduler(bus, timezone="UTC")
+    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui.attach_context(scheduler, [webui])
+    client = TestClient(webui.app)
+
+    response = client.get("/plan")
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"].startswith("Basic")
+
+
+def test_password_set_rejects_wrong_credentials():
+    bus = EventBus()
+    scheduler = Scheduler(bus, timezone="UTC")
+    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui.attach_context(scheduler, [webui])
+    client = TestClient(webui.app)
+
+    response = client.get("/plan", headers=_basic_auth_header("admin", "wrong"))
+    assert response.status_code == 401
+
+
+def test_password_set_accepts_correct_credentials_default_username():
+    bus = EventBus()
+    scheduler = Scheduler(bus, timezone="UTC")
+    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui.attach_context(scheduler, [webui])
+    client = TestClient(webui.app)
+
+    response = client.get("/plan", headers=_basic_auth_header("admin", "secret"))
+    assert response.status_code == 200
+
+
+def test_password_set_accepts_correct_credentials_custom_username():
+    bus = EventBus()
+    scheduler = Scheduler(bus, timezone="UTC")
+    webui = WebUIModule("webui", bus, {"username": "nico", "password": "secret"})
+    webui.attach_context(scheduler, [webui])
+    client = TestClient(webui.app)
+
+    response = client.get("/plan", headers=_basic_auth_header("nico", "secret"))
+    assert response.status_code == 200
+
+
+def test_password_set_protects_ui_routes_too():
+    bus = EventBus()
+    scheduler = Scheduler(bus, timezone="UTC")
+    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui.attach_context(scheduler, [webui])
+    client = TestClient(webui.app, follow_redirects=False)
+
+    response = client.get("/ui/")
+    assert response.status_code == 401
 
 
 def test_webui_enable_raises_and_stays_disabled_when_port_is_taken():
