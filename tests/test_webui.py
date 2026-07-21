@@ -43,8 +43,8 @@ class DummyModule(Module):
         return DUMMY_SCHEMA
 
 
-def _basic_auth_header(username: str, password: str) -> dict[str, str]:
-    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+def _basic_auth_header(password: str) -> dict[str, str]:
+    token = base64.b64encode(f":{password}".encode()).decode()
     return {"Authorization": f"Basic {token}"}
 
 
@@ -277,29 +277,18 @@ def test_password_set_rejects_wrong_credentials():
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
-    response = client.get("/plan", headers=_basic_auth_header("admin", "wrong"))
+    response = client.get("/plan", headers=_basic_auth_header("wrong"))
     assert response.status_code == 401
 
 
-def test_password_set_accepts_correct_credentials_default_username():
+def test_password_set_accepts_correct_password_regardless_of_username():
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
     webui = WebUIModule("webui", bus, {"password": "secret"})
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
-    response = client.get("/plan", headers=_basic_auth_header("admin", "secret"))
-    assert response.status_code == 200
-
-
-def test_password_set_accepts_correct_credentials_custom_username():
-    bus = EventBus()
-    scheduler = Scheduler(bus, timezone="UTC")
-    webui = WebUIModule("webui", bus, {"username": "nico", "password": "secret"})
-    webui.attach_context(scheduler, [webui])
-    client = TestClient(webui.app)
-
-    response = client.get("/plan", headers=_basic_auth_header("nico", "secret"))
+    response = client.get("/plan", headers=_basic_auth_header("secret"))
     assert response.status_code == 200
 
 

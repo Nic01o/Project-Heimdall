@@ -71,20 +71,20 @@ def _form_to_settings(form: FormData, schema: dict[str, dict[str, Any]]) -> dict
     return values
 
 
-def _check_basic_auth(header: str | None, username: str, password: str) -> bool:
-    """Constant-time check of a `Basic` Authorization header against the
-    configured credentials. secrets.compare_digest on both parts avoids
-    leaking their length/prefix through timing."""
+def _check_basic_auth(header: str | None, password: str) -> bool:
+    """Constant-time check of a `Basic` Authorization header's password
+    against the configured one. The username is ignored - a single shared
+    password is all this is meant to gate (a LAN-only device), so there's
+    no separate identity to check. secrets.compare_digest avoids leaking
+    the password's length/prefix through timing."""
     if header is None or not header.startswith("Basic "):
         return False
     try:
         decoded = base64.b64decode(header[len("Basic ") :]).decode("utf-8")
-        given_user, _, given_password = decoded.partition(":")
+        _, _, given_password = decoded.partition(":")
     except (binascii.Error, UnicodeDecodeError):
         return False
-    return secrets.compare_digest(given_user, username) and secrets.compare_digest(
-        given_password, password
-    )
+    return secrets.compare_digest(given_password, password)
 
 
 def _overrides_by_weekday(
@@ -216,7 +216,6 @@ class WebUIModule(Module):
         return {
             "host": {"type": "string", "label": "Host"},
             "port": {"type": "int", "min": 1, "max": 65535, "label": "Port"},
-            "username": {"type": "string", "label": "Username"},
             "password": {
                 "type": "password",
                 "label": "Password (empty disables the login prompt)",
@@ -250,9 +249,10 @@ class WebUIModule(Module):
             )
 
     def _register_auth(self) -> None:
-        """Gate every request behind HTTP Basic Auth when a password is
-        configured. Applies to the JSON API and the /ui pages alike since
-        both are served from the same app - there's no route that should be
+        """Gate every request behind a shared password (sent as HTTP Basic
+        Auth so the browser handles the prompt) when one is configured.
+        Applies to the JSON API and the /ui pages alike since both are
+        served from the same app - there's no route that should be
         reachable without it once a password is set. No password configured
         (the default) means no login prompt, so existing installs aren't
         locked out."""
@@ -262,8 +262,7 @@ class WebUIModule(Module):
             password = self.settings.get("password", "")
             if not password:
                 return await call_next(request)
-            username = self.settings.get("username", "admin")
-            if _check_basic_auth(request.headers.get("authorization"), username, password):
+            if _check_basic_auth(request.headers.get("authorization"), password):
                 return await call_next(request)
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Alarm Clock"'})
 
