@@ -43,7 +43,13 @@ def _resolve_widgets(schema: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
     resolved: dict[str, dict[str, Any]] = {}
     for key, field in schema.items():
         widget = field.get("widget", FIELD_TYPES[field["type"]]["widget"])
-        resolved[key] = {**field, "widget": widget}
+        resolved_field = {**field, "widget": widget}
+        if widget in ("number", "slider") and "step" not in resolved_field:
+            # Without an explicit step, HTML number/range inputs default to
+            # step=1, which rejects a float field's own unmodified default
+            # (e.g. min=0.1, value=1.0) as "not a multiple of step".
+            resolved_field["step"] = "1" if field["type"] == "int" else "any"
+        resolved[key] = resolved_field
     return resolved
 
 

@@ -7,11 +7,13 @@
     {% if field.widget == "slider" %}
       <input type="range" name="{{ name }}" value="{{ value }}"
              {% if field.min is not none %}min="{{ field.min }}"{% endif %}
-             {% if field.max is not none %}max="{{ field.max }}"{% endif %}>
+             {% if field.max is not none %}max="{{ field.max }}"{% endif %}
+             {% if field.step is not none %}step="{{ field.step }}"{% endif %}>
     {% elif field.widget == "number" %}
       <input type="number" name="{{ name }}" value="{{ value }}"
              {% if field.min is not none %}min="{{ field.min }}"{% endif %}
-             {% if field.max is not none %}max="{{ field.max }}"{% endif %}>
+             {% if field.max is not none %}max="{{ field.max }}"{% endif %}
+             {% if field.step is not none %}step="{{ field.step }}"{% endif %}>
     {% elif field.widget == "toggle" %}
       <input type="checkbox" name="{{ name }}" {% if value %}checked{% endif %}>
     {% elif field.widget == "password" %}
