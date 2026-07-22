@@ -11,8 +11,6 @@ settings changes over HTTP, so it necessarily knows about the other modules.
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
 import datetime
 import logging
 import secrets
@@ -21,7 +19,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -36,6 +34,7 @@ logger = logging.getLogger("alarmclock.modules.webui")
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+SESSION_COOKIE_NAME = "session"
 
 
 def _resolve_widgets(schema: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -71,20 +70,20 @@ def _form_to_settings(form: FormData, schema: dict[str, dict[str, Any]]) -> dict
     return values
 
 
-def _check_basic_auth(header: str | None, password: str) -> bool:
-    """Constant-time check of a `Basic` Authorization header's password
-    against the configured one. The username is ignored - a single shared
-    password is all this is meant to gate (a LAN-only device), so there's
-    no separate identity to check. secrets.compare_digest avoids leaking
-    the password's length/prefix through timing."""
-    if header is None or not header.startswith("Basic "):
-        return False
-    try:
-        decoded = base64.b64decode(header[len("Basic ") :]).decode("utf-8")
-        _, _, given_password = decoded.partition(":")
-    except (binascii.Error, UnicodeDecodeError):
-        return False
-    return secrets.compare_digest(given_password, password)
+def _check_password(candidate: str, password: str) -> bool:
+    """Constant-time compare of a submitted password against the configured
+    one. secrets.compare_digest avoids leaking the password's length/prefix
+    through timing."""
+    return secrets.compare_digest(candidate, password)
+
+
+def _safe_next(candidate: str) -> str:
+    """Only ever redirect back within this app - a `next` value pointing
+    elsewhere (e.g. `//evil.example`) would otherwise turn the login form
+    into an open redirect."""
+    if candidate.startswith("/") and not candidate.startswith("//"):
+        return candidate
+    return "/ui/"
 
 
 def _overrides_by_weekday(
@@ -139,10 +138,12 @@ class WebUIModule(Module):
         self._modules: dict[str, Module] = {}
         self._server: uvicorn.Server | None = None
         self._server_task: asyncio.Task[None] | None = None
+        self._sessions: set[str] = set()
         self.app = FastAPI(title="Alarm Clock")
         self.app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
         self._templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
         self._register_auth()
+        self._register_login_routes()
         self._register_routes()
         self._register_ui_routes()
 
@@ -222,6 +223,13 @@ class WebUIModule(Module):
             },
         }
 
+    async def update_settings(self, values: dict[str, Any]) -> None:
+        await super().update_settings(values)
+        # A settings change may have set/cleared/rotated the password - drop
+        # all logged-in sessions rather than track whether this particular
+        # update touched it.
+        self._sessions.clear()
+
     # -- helpers used by routes ---------------------------------------------
 
     def _get_scheduler(self) -> Scheduler:
@@ -249,22 +257,58 @@ class WebUIModule(Module):
             )
 
     def _register_auth(self) -> None:
-        """Gate every request behind a shared password (sent as HTTP Basic
-        Auth so the browser handles the prompt) when one is configured.
-        Applies to the JSON API and the /ui pages alike since both are
-        served from the same app - there's no route that should be
-        reachable without it once a password is set. No password configured
-        (the default) means no login prompt, so existing installs aren't
-        locked out."""
+        """Gate every request behind a shared password, checked via a login
+        page that sets a session cookie on success. Applies to the JSON API
+        and the /ui pages alike since both are served from the same app -
+        there's no route that should be reachable without it once a password
+        is set. No password configured (the default) means no login is
+        required, so existing installs aren't locked out."""
 
         @self.app.middleware("http")
         async def require_auth(request: Request, call_next):
             password = self.settings.get("password", "")
             if not password:
                 return await call_next(request)
-            if _check_basic_auth(request.headers.get("authorization"), password):
+
+            path = request.url.path
+            if path == "/login" or path.startswith("/static"):
                 return await call_next(request)
-            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Alarm Clock"'})
+
+            token = request.cookies.get(SESSION_COOKIE_NAME)
+            if token is not None and token in self._sessions:
+                return await call_next(request)
+
+            if path.startswith("/ui") or path == "/":
+                return RedirectResponse(f"/login?next={path}", status_code=303)
+            return JSONResponse(status_code=401, content={"detail": "not authenticated"})
+
+    def _register_login_routes(self) -> None:
+        """The login form itself - a single password field, no separate
+        identity to enter (a LAN-only device, one shared password)."""
+        app = self.app
+        templates = self._templates
+
+        @app.get("/login", include_in_schema=False)
+        async def login_form(request: Request, next: str = "/ui/", error: str | None = None):
+            return templates.TemplateResponse(
+                request, "login.html", {"next": _safe_next(next), "error": error}
+            )
+
+        @app.post("/login", include_in_schema=False)
+        async def login_submit(
+            password: str = Form(""), next: str = Form("/ui/")
+        ) -> RedirectResponse:
+            safe_next = _safe_next(next)
+            configured = self.settings.get("password", "")
+            if not configured or not _check_password(password, configured):
+                return RedirectResponse(
+                    f"/login?next={safe_next}&error=Wrong password", status_code=303
+                )
+            token = secrets.token_urlsafe(32)
+            self._sessions.add(token)
+            response = RedirectResponse(safe_next, status_code=303)
+            response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax")
+            return response
 
     def _register_routes(self) -> None:
         app = self.app
