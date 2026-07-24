@@ -6,6 +6,12 @@ persistence:
 
 modules:
 
+  webui:
+    enabled: true
+    class: 'alarmclock.modules.webui.webui:WebUIModule'
+    host: '0.0.0.0'
+    port: 5000
+
   sound:
     enabled: false
     class: 'alarmclock.modules.sound.sound:SoundModule'
@@ -18,7 +24,7 @@ modules:
     brightness: 100
 
   button:
-    enabled: false
+    enabled: true
     class: 'alarmclock.modules.button.button:ButtonModule'
     pin: 27
     driver: 'mock'
@@ -26,24 +32,24 @@ modules:
     combo_window_seconds: 0.4
     flags: ['press', 'release', 'click', 'double_click', 'multi_click', 'long_press']
 
-  lcd:
-    enabled: false
-    class: 'alarmclock.modules.lcd.lcd:LCDModule'
-    driver: 'mock'
-    interface: 'i2c'  # 'i2c' (backpack) or 'gpio' (raw RS/E/D4-D7 pins)
-    i2c_address: '0x27'
-    rs_pin: 7   # only used when interface is 'gpio'
-    e_pin: 8
-    rw_pin: -1  # -1 = not wired, R/W tied to GND
-    d4_pin: 25
-    d5_pin: 24
-    d6_pin: 23
-    d7_pin: 18
-    cols: 16
-    rows: 2
+#  lcd:
+#    enabled: false
+#    class: 'alarmclock.modules.lcd.lcd:LCDModule'
+#    driver: 'mock'
+#    interface: 'i2c'  # 'i2c' (backpack) or 'gpio' (raw RS/E/D4-D7 pins)
+#    i2c_address: '0x27'
+#    rs_pin: 7   # only used when interface is 'gpio'
+#    e_pin: 8
+#    rw_pin: -1  # -1 = not wired, R/W tied to GND
+#    d4_pin: 25
+#    d5_pin: 24
+#    d6_pin: 23
+#    d7_pin: 18
+#    cols: 16
+#    rows: 2
 
   led:
-    enabled: false
+    enabled: true
     class: 'alarmclock.modules.led.led:LEDModule'
     pin: 22
     driver: 'mock'
@@ -57,8 +63,3 @@ modules:
     driver: 'mock'
     read_interval_seconds: 2.0
 
-  webui:
-    enabled: true
-    class: 'alarmclock.modules.webui.webui:WebUIModule'
-    host: '0.0.0.0'
-    port: 5000
