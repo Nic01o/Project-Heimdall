@@ -148,7 +148,7 @@ class LEDModule(OutputModule):
         schema["blink_interval_seconds"] = {
             "type": "float",
             "min": 0.05,
-            "max": 2,
+            "max": 10,
             "label": "Blink interval (s)",
         }
         schema["reacts_to"] = {
