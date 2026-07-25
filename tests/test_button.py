@@ -16,8 +16,8 @@ from alarmclock.modules.flags import BUTTON_FLAGS
 
 
 def make_module(**extra_settings) -> ButtonModule:
-    config = {"pin": 27, **extra_settings}
-    module = ButtonModule("button", EventBus(), config)
+    module = ButtonModule("button", EventBus())
+    module.settings.update(extra_settings)
     module.poll_interval = 0.01  # keep tests fast
     return module
 
@@ -28,35 +28,36 @@ async def press_and_release(module, hold_seconds):
     module._driver.release()
 
 
-def test_settings_schema_includes_pin_and_driver():
-    async def scenario():
-        module = make_module()
-        schema = await module.get_settings_schema()
-        assert schema["pin"] == {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"}
-        assert schema["driver"]["type"] == "select"
-        assert schema["driver"]["options"] == ["mock", "real"]
+def test_settings_schema_includes_pin():
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert schema["pin"] == {
+        "type": "int",
+        "min": 0,
+        "max": 40,
+        "label": "GPIO Pin",
+        "default": 27,
+    }
 
-    asyncio.run(scenario())
+
+def test_settings_schema_does_not_include_driver():
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert "driver" not in schema
 
 
 def test_settings_schema_has_pattern_thresholds():
-    async def scenario():
-        module = make_module()
-        schema = await module.get_settings_schema()
-        assert schema["long_press_seconds"]["type"] == "float"
-        assert schema["combo_window_seconds"]["type"] == "float"
-
-    asyncio.run(scenario())
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert schema["long_press_seconds"]["type"] == "float"
+    assert schema["combo_window_seconds"]["type"] == "float"
 
 
 def test_settings_schema_has_flags_multiselect():
-    async def scenario():
-        module = make_module()
-        schema = await module.get_settings_schema()
-        assert schema["flags"]["type"] == "multiselect"
-        assert schema["flags"]["options"] == BUTTON_FLAGS
-
-    asyncio.run(scenario())
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert schema["flags"]["type"] == "multiselect"
+    assert schema["flags"]["options"] == BUTTON_FLAGS
 
 
 def test_pin_property_reads_from_settings():
@@ -77,7 +78,7 @@ def test_defaults_to_mock_driver():
 def test_pressing_button_emits_pressed_event():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule("button", bus, {"pin": 27})
+        module = ButtonModule("button", bus)
         module.poll_interval = 0.01
         await module.init()
 
@@ -101,7 +102,7 @@ def test_pressing_button_emits_pressed_event():
 def test_releasing_button_emits_released_event():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule("button", bus, {"pin": 27})
+        module = ButtonModule("button", bus)
         module.poll_interval = 0.01
         await module.init()
 
@@ -127,7 +128,7 @@ def test_releasing_button_emits_released_event():
 def test_holding_button_only_emits_once_per_press():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule("button", bus, {"pin": 27})
+        module = ButtonModule("button", bus)
         module.poll_interval = 0.01
         await module.init()
 
@@ -158,7 +159,8 @@ def test_holding_button_only_emits_once_per_press():
 def test_single_short_press_emits_combo_count_one():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule("button", bus, {"pin": 27, "combo_window_seconds": 0.03})
+        module = ButtonModule("button", bus)
+        module.settings["combo_window_seconds"] = 0.03
         module.poll_interval = 0.01
         await module.init()
 
@@ -182,9 +184,9 @@ def test_single_short_press_emits_combo_count_one():
 def test_double_press_emits_combo_count_two():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule(
-            "button", bus, {"pin": 27, "combo_window_seconds": 0.05, "long_press_seconds": 1.0}
-        )
+        module = ButtonModule("button", bus)
+        module.settings["combo_window_seconds"] = 0.05
+        module.settings["long_press_seconds"] = 1.0
         module.poll_interval = 0.01
         await module.init()
 
@@ -210,9 +212,9 @@ def test_double_press_emits_combo_count_two():
 def test_triple_press_emits_combo_count_three():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule(
-            "button", bus, {"pin": 27, "combo_window_seconds": 0.05, "long_press_seconds": 1.0}
-        )
+        module = ButtonModule("button", bus)
+        module.settings["combo_window_seconds"] = 0.05
+        module.settings["long_press_seconds"] = 1.0
         module.poll_interval = 0.01
         await module.init()
 
@@ -238,9 +240,9 @@ def test_triple_press_emits_combo_count_three():
 def test_long_press_emits_long_press_not_combo():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule(
-            "button", bus, {"pin": 27, "combo_window_seconds": 0.03, "long_press_seconds": 0.05}
-        )
+        module = ButtonModule("button", bus)
+        module.settings["combo_window_seconds"] = 0.03
+        module.settings["long_press_seconds"] = 0.05
         module.poll_interval = 0.01
         await module.init()
 
@@ -273,7 +275,7 @@ def test_long_press_emits_long_press_not_combo():
 def test_press_and_release_emit_press_and_release_flags():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule("button", bus, {"pin": 27})
+        module = ButtonModule("button", bus)
         module.poll_interval = 0.01
         await module.init()
 
@@ -300,7 +302,8 @@ def test_press_and_release_emit_press_and_release_flags():
 def test_click_double_click_and_multi_click_emit_matching_flags():
     async def scenario(presses, expected_flag):
         bus = EventBus()
-        module = ButtonModule("button", bus, {"pin": 27, "combo_window_seconds": 0.03})
+        module = ButtonModule("button", bus)
+        module.settings["combo_window_seconds"] = 0.03
         module.poll_interval = 0.01
         await module.init()
 
@@ -329,9 +332,9 @@ def test_click_double_click_and_multi_click_emit_matching_flags():
 def test_long_press_emits_long_press_flag():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule(
-            "button", bus, {"pin": 27, "combo_window_seconds": 0.03, "long_press_seconds": 0.05}
-        )
+        module = ButtonModule("button", bus)
+        module.settings["combo_window_seconds"] = 0.03
+        module.settings["long_press_seconds"] = 0.05
         module.poll_interval = 0.01
         await module.init()
 
@@ -356,7 +359,8 @@ def test_long_press_emits_long_press_flag():
 def test_flags_setting_filters_which_flags_are_sent():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule("button", bus, {"pin": 27, "flags": ["long_press"]})
+        module = ButtonModule("button", bus)
+        module.settings["flags"] = ["long_press"]
         module.poll_interval = 0.01
         await module.init()
 
@@ -382,8 +386,11 @@ def test_flags_setting_filters_which_flags_are_sent():
 def test_two_buttons_track_combos_independently():
     async def scenario():
         bus = EventBus()
-        module_a = ButtonModule("button_a", bus, {"pin": 17, "combo_window_seconds": 0.03})
-        module_b = ButtonModule("button_b", bus, {"pin": 27, "combo_window_seconds": 0.03})
+        module_a = ButtonModule("button_a", bus)
+        module_a.settings["pin"] = 17
+        module_a.settings["combo_window_seconds"] = 0.03
+        module_b = ButtonModule("button_b", bus)
+        module_b.settings["combo_window_seconds"] = 0.03
         module_a.poll_interval = 0.01
         module_b.poll_interval = 0.01
         await module_a.init()
@@ -425,7 +432,8 @@ def test_release_without_matching_press_is_ignored():
 def test_disable_cancels_pending_combo_task():
     async def scenario():
         bus = EventBus()
-        module = ButtonModule("button", bus, {"pin": 27, "combo_window_seconds": 1.0})
+        module = ButtonModule("button", bus)
+        module.settings["combo_window_seconds"] = 1.0
         module.poll_interval = 0.01
         await module.init()
 
@@ -502,7 +510,7 @@ def test_real_button_driver_sets_up_and_reads_gpio():
 def test_button_module_selects_real_driver_when_configured():
     fake_gpio = _install_fake_rpi_gpio()
     try:
-        module = ButtonModule("button", EventBus(), {"pin": 27, "driver": "real"})
+        module = ButtonModule("button", EventBus(), {"driver": "real"})
         asyncio.run(module.init())
 
         from alarmclock.modules.button.real import RealButtonDriver

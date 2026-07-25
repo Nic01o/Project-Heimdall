@@ -15,24 +15,27 @@ from alarmclock.modules.lcd.mock import MockLCDDriver
 
 
 def make_module(**extra_settings) -> LCDModule:
-    return LCDModule("lcd", EventBus(), dict(extra_settings))
+    module = LCDModule("lcd", EventBus())
+    module.settings.update(extra_settings)
+    return module
 
 
-def test_settings_schema_includes_driver_size_interface_and_pins():
-    async def scenario():
-        module = make_module()
-        schema = await module.get_settings_schema()
-        assert schema["driver"]["type"] == "select"
-        assert schema["driver"]["options"] == ["mock", "real"]
-        assert schema["cols"]["type"] == "int"
-        assert schema["rows"]["type"] == "int"
-        assert schema["interface"]["type"] == "select"
-        assert schema["interface"]["options"] == ["i2c", "gpio"]
-        assert schema["i2c_address"]["type"] == "string"
-        for pin_field in ("rs_pin", "e_pin", "rw_pin", "d4_pin", "d5_pin", "d6_pin", "d7_pin"):
-            assert schema[pin_field]["type"] == "int"
+def test_settings_schema_includes_size_interface_and_pins():
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert schema["cols"]["type"] == "int"
+    assert schema["rows"]["type"] == "int"
+    assert schema["interface"]["type"] == "select"
+    assert schema["interface"]["options"] == ["i2c", "gpio"]
+    assert schema["i2c_address"]["type"] == "string"
+    for pin_field in ("rs_pin", "e_pin", "rw_pin", "d4_pin", "d5_pin", "d6_pin", "d7_pin"):
+        assert schema[pin_field]["type"] == "int"
 
-    asyncio.run(scenario())
+
+def test_settings_schema_does_not_include_driver():
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert "driver" not in schema
 
 
 def test_cols_rows_and_address_default():
@@ -50,26 +53,12 @@ def test_cols_rows_and_address_read_from_settings():
     assert module.i2c_address == 0x3F
 
 
-def test_gpio_pins_have_no_hidden_code_default():
-    """GPIO wiring is board-specific - unlike cols/rows/i2c_address there's
-    no sensible universal default, so these must come from config (same
-    contract as OutputModule/InputModule's "pin") rather than silently
-    falling back to a guessed pin number."""
+def test_gpio_pins_default_to_the_config_yaml_template_wiring():
     module = make_module()
-    for attr in ("rs_pin", "e_pin", "rw_pin"):
-        try:
-            getattr(module, attr)
-        except KeyError:
-            pass
-        else:
-            raise AssertionError(f"{attr} should require an explicit setting")
-
-    try:
-        module.data_pins
-    except KeyError:
-        pass
-    else:
-        raise AssertionError("data_pins should require explicit d4-d7 settings")
+    assert module.rs_pin == 7
+    assert module.e_pin == 8
+    assert module.rw_pin == -1
+    assert module.data_pins == [25, 24, 23, 18]
 
 
 def test_gpio_pins_read_from_settings():
@@ -149,7 +138,7 @@ def test_clear_blanks_all_rows():
 def test_alarm_triggered_shows_alarm_and_stopped_clears_the_flag():
     async def scenario():
         bus = EventBus()
-        module = LCDModule("lcd", bus, {"cols": 16, "rows": 2})
+        module = LCDModule("lcd", bus)
         await module.init()
 
         await bus.emit("alarm.triggered", {"id": "a1", "label": "Wake up"})
@@ -180,7 +169,7 @@ def test_on_event_dispatches_like_the_bus_subscriptions():
 def test_clock_loop_shows_time_and_date_while_idle():
     async def scenario():
         fixed_now = datetime.datetime(2026, 7, 21, 7, 30, 15)
-        module = LCDModule("lcd", EventBus(), {"cols": 16, "rows": 2}, now=lambda: fixed_now)
+        module = LCDModule("lcd", EventBus(), now=lambda: fixed_now)
         module.clock_interval = 0.01
         await module.init()
 
@@ -197,7 +186,7 @@ def test_clock_loop_shows_time_and_date_while_idle():
 def test_clock_loop_pauses_while_alarm_is_showing():
     async def scenario():
         bus = EventBus()
-        module = LCDModule("lcd", bus, {"cols": 16, "rows": 2})
+        module = LCDModule("lcd", bus)
         module.clock_interval = 0.01
         await module.init()
 
@@ -328,11 +317,8 @@ def test_real_i2c_lcd_driver_sets_up_and_writes_over_i2c():
 def test_lcd_module_selects_real_i2c_driver_when_configured():
     fake_i2c = _install_fake_rplcd_i2c()
     try:
-        module = LCDModule(
-            "lcd",
-            EventBus(),
-            {"driver": "real", "interface": "i2c", "i2c_address": "0x27", "cols": 20, "rows": 4},
-        )
+        module = LCDModule("lcd", EventBus(), {"driver": "real"})
+        module.settings.update({"interface": "i2c", "i2c_address": "0x27", "cols": 20, "rows": 4})
         asyncio.run(module.init())
 
         from alarmclock.modules.lcd.real import RealI2CLCDDriver
@@ -382,23 +368,10 @@ def test_real_gpio_lcd_driver_passes_through_an_explicit_rw_pin():
 def test_lcd_module_selects_real_gpio_driver_when_configured():
     fake_gpio_backend, _ = _install_fake_rplcd_gpio()
     try:
-        module = LCDModule(
-            "lcd",
-            EventBus(),
-            {
-                "driver": "real",
-                "interface": "gpio",
-                "rs_pin": 7,
-                "e_pin": 8,
-                "rw_pin": -1,
-                "d4_pin": 25,
-                "d5_pin": 24,
-                "d6_pin": 23,
-                "d7_pin": 18,
-                "cols": 16,
-                "rows": 2,
-            },
-        )
+        # rs_pin/e_pin/rw_pin/d4-d7_pin/cols/rows all match the schema
+        # defaults already - only `interface` needs to be pushed to "gpio".
+        module = LCDModule("lcd", EventBus(), {"driver": "real"})
+        module.settings["interface"] = "gpio"
         asyncio.run(module.init())
 
         from alarmclock.modules.lcd.real import RealGPIOLCDDriver

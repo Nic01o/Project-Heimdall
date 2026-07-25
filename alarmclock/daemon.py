@@ -58,8 +58,9 @@ async def _load_modules(
             attach_context(scheduler, modules)
 
     for instance in modules:
-        await instance.enable()
-        logger.info("module %r enabled", instance.name)
+        if instance.settings.get("active", True):
+            await instance.enable()
+            logger.info("module %r enabled", instance.name)
 
     return modules
 

@@ -13,6 +13,8 @@ from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.base import Module
 from alarmclock.modules.webui.webui import WebUIModule
 
+ACTIVE_SCHEMA_FIELD = {"active": {"type": "bool", "label": "Aktiv", "default": True}}
+
 DUMMY_SCHEMA = {
     "brightness": {
         "type": "int",
@@ -20,6 +22,7 @@ DUMMY_SCHEMA = {
         "max": 100,
         "label": "Brightness",
         "requires_restart": True,
+        "default": 50,
     },
 }
 
@@ -44,15 +47,15 @@ class DummyModule(Module):
     async def on_event(self, event: str, payload: Any = None) -> None:
         pass
 
-    async def get_settings_schema(self) -> dict:
-        return DUMMY_SCHEMA
+    def get_settings_schema(self) -> dict:
+        return {**super().get_settings_schema(), **DUMMY_SCHEMA}
 
 
 def make_client() -> tuple[TestClient, Scheduler, WebUIModule, DummyModule]:
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
     webui = WebUIModule("webui", bus, {})
-    dummy = DummyModule("dummy", bus, {"brightness": 50})
+    dummy = DummyModule("dummy", bus)
     webui.attach_context(scheduler, [webui, dummy])
     return TestClient(webui.app), scheduler, webui, dummy
 
@@ -239,35 +242,37 @@ def test_get_settings_schema_for_module():
     client, _scheduler, _webui, _dummy = make_client()
     response = client.get("/modules/dummy/settings/schema")
     assert response.status_code == 200
-    assert response.json() == DUMMY_SCHEMA
+    assert response.json() == {**ACTIVE_SCHEMA_FIELD, **DUMMY_SCHEMA}
 
 
 def test_get_settings_for_module():
     client, _scheduler, _webui, _dummy = make_client()
     response = client.get("/modules/dummy/settings")
     assert response.status_code == 200
-    assert response.json() == {"brightness": 50}
+    assert response.json() == {"active": True, "brightness": 50}
 
 
 def test_update_settings_for_module_validates_and_persists():
     client, _scheduler, _webui, dummy = make_client()
     response = client.post("/modules/dummy/settings", json={"brightness": 75})
     assert response.status_code == 200
-    assert response.json() == {"brightness": 75}
-    assert dummy.settings == {"brightness": 75}
+    assert response.json() == {"active": True, "brightness": 75}
+    assert dummy.settings == {"active": True, "brightness": 75}
 
 
 def test_update_settings_rejects_invalid_value():
     client, _scheduler, _webui, dummy = make_client()
     response = client.post("/modules/dummy/settings", json={"brightness": 999})
     assert response.status_code == 400
-    assert dummy.settings == {"brightness": 50}
+    assert dummy.settings == {"active": True, "brightness": 50}
 
 
 def test_webui_enable_and_disable_lifecycle_starts_and_stops_server_task():
     async def scenario():
         bus = EventBus()
-        webui = WebUIModule("webui", bus, {"host": "127.0.0.1", "port": 0})
+        webui = WebUIModule("webui", bus, {})
+        webui.settings["host"] = "127.0.0.1"
+        webui.settings["port"] = 0
         await webui.init()
 
         await webui.enable()
@@ -285,7 +290,9 @@ def test_webui_enable_and_disable_lifecycle_starts_and_stops_server_task():
 def test_webui_enable_clears_needs_restart():
     async def scenario():
         bus = EventBus()
-        webui = WebUIModule("webui", bus, {"host": "127.0.0.1", "port": 0})
+        webui = WebUIModule("webui", bus, {})
+        webui.settings["host"] = "127.0.0.1"
+        webui.settings["port"] = 0
         await webui.init()
         webui.needs_restart = True
 
@@ -300,7 +307,7 @@ def test_webui_enable_clears_needs_restart():
 def test_webui_update_settings_flags_needs_restart_for_host_and_port_only():
     async def scenario():
         bus = EventBus()
-        webui = WebUIModule("webui", bus, {"host": "127.0.0.1", "port": 5000})
+        webui = WebUIModule("webui", bus, {})
         await webui.init()
 
         await webui.update_settings({"port": 5001})
@@ -322,7 +329,8 @@ def test_no_password_set_allows_requests_without_credentials():
 def test_password_set_rejects_api_requests_without_login():
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
-    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui = WebUIModule("webui", bus, {})
+    webui.settings["password"] = "secret"
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
@@ -333,7 +341,8 @@ def test_password_set_rejects_api_requests_without_login():
 def test_password_set_redirects_ui_requests_without_login_to_login_page():
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
-    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui = WebUIModule("webui", bus, {})
+    webui.settings["password"] = "secret"
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app, follow_redirects=False)
 
@@ -345,7 +354,8 @@ def test_password_set_redirects_ui_requests_without_login_to_login_page():
 def test_login_page_is_reachable_without_a_session():
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
-    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui = WebUIModule("webui", bus, {})
+    webui.settings["password"] = "secret"
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
@@ -358,7 +368,8 @@ def test_login_page_is_reachable_without_a_session():
 def test_login_with_wrong_password_does_not_grant_access():
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
-    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui = WebUIModule("webui", bus, {})
+    webui.settings["password"] = "secret"
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
@@ -370,7 +381,8 @@ def test_login_with_wrong_password_does_not_grant_access():
 def test_login_with_correct_password_grants_session_access():
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
-    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui = WebUIModule("webui", bus, {})
+    webui.settings["password"] = "secret"
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
@@ -387,7 +399,8 @@ def test_login_with_correct_password_grants_session_access():
 def test_login_redirects_back_to_the_originally_requested_page():
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
-    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui = WebUIModule("webui", bus, {})
+    webui.settings["password"] = "secret"
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app, follow_redirects=False)
 
@@ -402,7 +415,8 @@ def test_login_redirects_back_to_the_originally_requested_page():
 def test_changing_password_invalidates_existing_sessions():
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
-    webui = WebUIModule("webui", bus, {"password": "secret"})
+    webui = WebUIModule("webui", bus, {})
+    webui.settings["password"] = "secret"
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
@@ -417,12 +431,16 @@ def test_changing_password_invalidates_existing_sessions():
 def test_webui_enable_raises_and_stays_disabled_when_port_is_taken():
     async def scenario():
         bus = EventBus()
-        first = WebUIModule("webui", bus, {"host": "127.0.0.1", "port": 0})
+        first = WebUIModule("webui", bus, {})
+        first.settings["host"] = "127.0.0.1"
+        first.settings["port"] = 0
         await first.init()
         await first.enable()
         port = first._server.servers[0].sockets[0].getsockname()[1]
 
-        second = WebUIModule("webui2", bus, {"host": "127.0.0.1", "port": port})
+        second = WebUIModule("webui2", bus, {})
+        second.settings["host"] = "127.0.0.1"
+        second.settings["port"] = port
         await second.init()
         try:
             with pytest.raises(RuntimeError):

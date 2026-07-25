@@ -71,6 +71,16 @@ def _resolve_widgets(schema: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
     return resolved
 
 
+def _editable_schema(schema: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """`active` is controlled via the dedicated enable/disable buttons
+    (module.set_active(), see /ui/modules/{name}/enable|disable) - excluded
+    here so saving the generic settings form can't silently flip it off via
+    the "unchecked checkbox" trap (`_form_to_settings` reads a bool field
+    that's missing from the submitted form as False, but a hidden field is
+    always "missing")."""
+    return {key: field for key, field in schema.items() if key != "active"}
+
+
 def _form_to_settings(form: FormData, schema: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Coerce submitted form fields to the types their schema declares.
     Fields absent from the form are left untouched (update_settings merges),
@@ -225,37 +235,51 @@ class WebUIModule(Module):
 
     # -- settings ---------------------------------------------------------------
 
-    async def get_settings_schema(self) -> dict[str, dict[str, Any]]:
-        return {
-            "host": {"type": "string", "label": "Host", "requires_restart": True},
-            "port": {
-                "type": "int",
-                "min": 1,
-                "max": 65535,
-                "label": "Port",
-                "requires_restart": True,
-            },
-            "password": {
-                "type": "password",
-                "label": "Password (empty disables the login prompt)",
-            },
-            "color_profile": {
-                "type": "select",
-                "options": [*COLOR_PROFILES, "custom"],
-                "label": "Farbprofil",
-                # Consumed client-side by module_settings.html to live-preview
-                # a profile before it's saved, without a round-trip per pick.
-                "profiles": COLOR_PROFILES,
-            },
-            "custom_accent": {
-                "type": "color",
-                "label": 'Akzentfarbe',
-            },
-            "custom_accent_strong": {
-                "type": "color",
-                "label": 'kräftiger Akzent',
-            },
-        }
+    def get_settings_schema(self) -> dict[str, dict[str, Any]]:
+        schema = dict(super().get_settings_schema())
+        schema.update(
+            {
+                "host": {
+                    "type": "string",
+                    "label": "Host",
+                    "requires_restart": True,
+                    "default": "0.0.0.0",
+                },
+                "port": {
+                    "type": "int",
+                    "min": 1,
+                    "max": 65535,
+                    "label": "Port",
+                    "requires_restart": True,
+                    "default": 5000,
+                },
+                "password": {
+                    "type": "password",
+                    "label": "Password (empty disables the login prompt)",
+                    "default": "",
+                },
+                "color_profile": {
+                    "type": "select",
+                    "options": [*COLOR_PROFILES, "custom"],
+                    "label": "Farbprofil",
+                    # Consumed client-side by module_settings.html to live-preview
+                    # a profile before it's saved, without a round-trip per pick.
+                    "profiles": COLOR_PROFILES,
+                    "default": "sunrise",
+                },
+                "custom_accent": {
+                    "type": "color",
+                    "label": 'Akzentfarbe',
+                    "default": "#000000",
+                },
+                "custom_accent_strong": {
+                    "type": "color",
+                    "label": 'kräftiger Akzent',
+                    "default": "#000000",
+                },
+            }
+        )
+        return schema
 
     def _resolve_accent_colors(self) -> dict[str, str]:
         """Look up the accent colors the currently selected color profile
@@ -440,12 +464,18 @@ class WebUIModule(Module):
 
         @app.post("/modules/{name}/enable")
         async def enable_module(name: str) -> dict[str, str]:
-            await self._get_module(name).enable()
+            try:
+                await self._get_module(name).set_active(True)
+            except SettingsValidationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {"status": "ok"}
 
         @app.post("/modules/{name}/disable")
         async def disable_module(name: str) -> dict[str, str]:
-            await self._get_module(name).disable()
+            try:
+                await self._get_module(name).set_active(False)
+            except SettingsValidationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {"status": "ok"}
 
         @app.post("/modules/{name}/restart")
@@ -455,7 +485,7 @@ class WebUIModule(Module):
 
         @app.get("/modules/{name}/settings/schema")
         async def get_settings_schema(name: str) -> dict[str, Any]:
-            return await self._get_module(name).get_settings_schema()
+            return self._get_module(name).get_settings_schema()
 
         @app.get("/modules/{name}/settings")
         async def get_settings(name: str) -> dict[str, Any]:
@@ -555,7 +585,7 @@ class WebUIModule(Module):
 
             modules = []
             for module in self._modules.values():
-                schema = await module.get_settings_schema()
+                schema = module.get_settings_schema()
                 if module.needs_restart:
                     status_class, status_label = "restart", "Neustart nötig"
                 elif module.enabled:
@@ -664,12 +694,18 @@ class WebUIModule(Module):
 
         @app.post("/ui/modules/{name}/enable", include_in_schema=False)
         async def ui_enable_module(name: str) -> RedirectResponse:
-            await self._get_module(name).enable()
+            try:
+                await self._get_module(name).set_active(True)
+            except SettingsValidationError as exc:
+                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
             return RedirectResponse("/ui/", status_code=303)
 
         @app.post("/ui/modules/{name}/disable", include_in_schema=False)
         async def ui_disable_module(name: str) -> RedirectResponse:
-            await self._get_module(name).disable()
+            try:
+                await self._get_module(name).set_active(False)
+            except SettingsValidationError as exc:
+                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
             return RedirectResponse("/ui/", status_code=303)
 
         @app.post("/ui/modules/{name}/restart", include_in_schema=False)
@@ -680,7 +716,7 @@ class WebUIModule(Module):
         @app.get("/ui/modules/{name}/settings", include_in_schema=False)
         async def ui_module_settings(request: Request, name: str, error: str | None = None):
             module = self._get_module(name)
-            schema = await module.get_settings_schema()
+            schema = _editable_schema(module.get_settings_schema())
             values = await module.get_settings()
             return templates.TemplateResponse(
                 request,
@@ -689,6 +725,7 @@ class WebUIModule(Module):
                     "module": module,
                     "schema": _resolve_widgets(schema),
                     "values": values,
+                    "locked_fields": module.locked_fields,
                     "error": error,
                 },
             )
@@ -696,7 +733,7 @@ class WebUIModule(Module):
         @app.post("/ui/modules/{name}/settings", include_in_schema=False)
         async def ui_update_module_settings(name: str, request: Request) -> RedirectResponse:
             module = self._get_module(name)
-            schema = await module.get_settings_schema()
+            schema = _editable_schema(module.get_settings_schema())
             form = await request.form()
             try:
                 values = _form_to_settings(form, schema)

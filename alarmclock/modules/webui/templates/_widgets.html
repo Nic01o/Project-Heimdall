@@ -1,27 +1,29 @@
 {# Renders one settings field. `field.widget` must already be resolved
    (see webui.py:_resolve_widgets) - this macro only maps widget -> markup,
    it never looks at `field.type` directly. #}
-{% macro render_field(name, field, value) %}
+{% macro render_field(name, field, value, locked=false) %}
   <label class="field">
-    <span>{{ field.label or name }}</span>
+    <span>{{ field.label or name }}{% if locked %} <span class="locked-hint">🔒 durch Config gesperrt</span>{% endif %}</span>
     {% if field.widget == "slider" %}
-      <input type="range" id="field-{{ name }}" name="{{ name }}" value="{{ value }}"
+      <input type="range" id="field-{{ name }}" name="{{ name }}" value="{{ value }}" {% if locked %}disabled{% endif %}
              {% if field.min is not none %}min="{{ field.min }}"{% endif %}
              {% if field.max is not none %}max="{{ field.max }}"{% endif %}
              {% if field.step is not none %}step="{{ field.step }}"{% endif %}>
     {% elif field.widget == "number" %}
-      <input type="number" id="field-{{ name }}" name="{{ name }}" value="{{ value }}"
+      <input type="number" id="field-{{ name }}" name="{{ name }}" value="{{ value }}" {% if locked %}disabled{% endif %}
              {% if field.min is not none %}min="{{ field.min }}"{% endif %}
              {% if field.max is not none %}max="{{ field.max }}"{% endif %}
              {% if field.step is not none %}step="{{ field.step }}"{% endif %}>
     {% elif field.widget == "toggle" %}
-      <input type="checkbox" id="field-{{ name }}" name="{{ name }}" {% if value %}checked{% endif %}>
+      <span class="switch switch-checkbox">
+        <input type="checkbox" id="field-{{ name }}" name="{{ name }}" {% if value %}checked{% endif %} {% if locked %}disabled{% endif %}>
+      </span>
     {% elif field.widget == "password" %}
-      <input type="password" id="field-{{ name }}" name="{{ name }}" value="{{ value or '' }}">
+      <input type="password" id="field-{{ name }}" name="{{ name }}" value="{{ value or '' }}" {% if locked %}disabled{% endif %}>
     {% elif field.widget == "colorpicker" %}
-      <input type="color" id="field-{{ name }}" name="{{ name }}" value="{{ value or '#000000' }}">
+      <input type="color" id="field-{{ name }}" name="{{ name }}" value="{{ value or '#000000' }}" {% if locked %}disabled{% endif %}>
     {% elif field.widget == "dropdown" %}
-      <select id="field-{{ name }}" name="{{ name }}">
+      <select id="field-{{ name }}" name="{{ name }}" {% if locked %}disabled{% endif %}>
         {% for option in field.options %}
           <option value="{{ option }}" {% if option == value %}selected{% endif %}>{{ option }}</option>
         {% endfor %}
@@ -30,11 +32,11 @@
       <span class="checkboxes">
       {% for option in field.options %}
         <label><input type="checkbox" name="{{ name }}" value="{{ option }}"
-          {% if value and option in value %}checked{% endif %}> {{ option }}</label>
+          {% if value and option in value %}checked{% endif %} {% if locked %}disabled{% endif %}> {{ option }}</label>
       {% endfor %}
       </span>
     {% else %}
-      <input type="text" id="field-{{ name }}" name="{{ name }}" value="{{ value or '' }}">
+      <input type="text" id="field-{{ name }}" name="{{ name }}" value="{{ value or '' }}" {% if locked %}disabled{% endif %}>
     {% endif %}
   </label>
 {% endmacro %}

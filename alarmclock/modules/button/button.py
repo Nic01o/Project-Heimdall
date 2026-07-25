@@ -52,7 +52,7 @@ class ButtonModule(InputModule):
         self._pending_task: asyncio.Task[None] | None = None
 
     def _make_driver(self) -> Any:
-        if self.settings.get("driver", "mock") == "real":
+        if self.config.get("driver", "mock") == "real":
             from alarmclock.modules.button.real import RealButtonDriver
 
             return RealButtonDriver(self.pin)
@@ -78,7 +78,7 @@ class ButtonModule(InputModule):
     async def _emit_flag(self, flag: str) -> None:
         """Re-emit a gesture as the generic `button.flag` event, but only if
         it's one of the flags this button is configured to send."""
-        if flag in self.settings.get("flags", BUTTON_FLAGS):
+        if flag in self.settings["flags"]:
             await self.bus.emit("button.flag", {"name": self.name, "pin": self.pin, "flag": flag})
 
     async def _register_release(self) -> None:
@@ -88,7 +88,7 @@ class ButtonModule(InputModule):
             return
 
         duration = time.monotonic() - pressed_at
-        long_press_seconds = self.settings.get("long_press_seconds", DEFAULT_LONG_PRESS_SECONDS)
+        long_press_seconds = self.settings["long_press_seconds"]
         if duration >= long_press_seconds:
             await self.bus.emit(
                 "button.long_press", {"name": self.name, "pin": self.pin, "duration": duration}
@@ -103,7 +103,7 @@ class ButtonModule(InputModule):
             self._pending_task.cancel()
 
         self._pending_count += 1
-        combo_window = self.settings.get("combo_window_seconds", DEFAULT_COMBO_WINDOW_SECONDS)
+        combo_window = self.settings["combo_window_seconds"]
         self._pending_task = asyncio.create_task(self._finalize_combo(combo_window))
 
     async def _finalize_combo(self, delay: float) -> None:
@@ -128,28 +128,27 @@ class ButtonModule(InputModule):
     async def on_event(self, event: str, payload: Any = None) -> None:
         pass
 
-    async def get_settings_schema(self) -> dict[str, dict[str, Any]]:
-        schema = dict(await super().get_settings_schema())
-        schema["driver"] = {
-            "type": "select",
-            "options": ["mock", "real"],
-            "label": "Driver",
-        }
+    def get_settings_schema(self) -> dict[str, dict[str, Any]]:
+        schema = dict(super().get_settings_schema())
+        schema["pin"] = {**schema["pin"], "default": 27}
         schema["long_press_seconds"] = {
             "type": "float",
             "min": 0.1,
             "max": 10,
             "label": "Long press threshold (s)",
+            "default": DEFAULT_LONG_PRESS_SECONDS,
         }
         schema["combo_window_seconds"] = {
             "type": "float",
             "min": 0.1,
             "max": 3,
             "label": "Combo window (s)",
+            "default": DEFAULT_COMBO_WINDOW_SECONDS,
         }
         schema["flags"] = {
             "type": "multiselect",
             "options": BUTTON_FLAGS,
             "label": "Flags to send",
+            "default": list(BUTTON_FLAGS),
         }
         return schema

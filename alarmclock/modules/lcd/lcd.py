@@ -52,7 +52,7 @@ class LCDModule(Module):
         self.bus.subscribe("alarm.stopped", self._on_alarm_stopped)
 
     def _make_driver(self) -> Any:
-        if self.settings.get("driver", "mock") == "real":
+        if self.config.get("driver", "mock") == "real":
             if self.interface == "gpio":
                 from alarmclock.modules.lcd.real import RealGPIOLCDDriver
 
@@ -71,19 +71,19 @@ class LCDModule(Module):
 
     @property
     def cols(self) -> int:
-        return self.settings.get("cols", DEFAULT_COLS)
+        return self.settings["cols"]
 
     @property
     def rows(self) -> int:
-        return self.settings.get("rows", DEFAULT_ROWS)
+        return self.settings["rows"]
 
     @property
     def interface(self) -> str:
-        return self.settings.get("interface", "i2c")
+        return self.settings["interface"]
 
     @property
     def i2c_address(self) -> int:
-        raw = self.settings.get("i2c_address", DEFAULT_I2C_ADDRESS)
+        raw = self.settings["i2c_address"]
         return int(raw, 0) if isinstance(raw, str) else raw
 
     @property
@@ -171,34 +171,80 @@ class LCDModule(Module):
 
     # -- settings ---------------------------------------------------------
 
-    async def get_settings_schema(self) -> dict[str, dict[str, Any]]:
-        schema = dict(await super().get_settings_schema())
-        schema["driver"] = {
-            "type": "select",
-            "options": ["mock", "real"],
-            "label": "Driver",
+    def get_settings_schema(self) -> dict[str, dict[str, Any]]:
+        schema = dict(super().get_settings_schema())
+        schema["cols"] = {
+            "type": "int",
+            "min": 8,
+            "max": 40,
+            "label": "Columns",
+            "default": DEFAULT_COLS,
         }
-        schema["cols"] = {"type": "int", "min": 8, "max": 40, "label": "Columns"}
-        schema["rows"] = {"type": "int", "min": 1, "max": 4, "label": "Rows"}
+        schema["rows"] = {
+            "type": "int",
+            "min": 1,
+            "max": 4,
+            "label": "Rows",
+            "default": DEFAULT_ROWS,
+        }
         schema["interface"] = {
             "type": "select",
             "options": ["i2c", "gpio"],
             "label": "Interface",
+            "default": "i2c",
         }
         schema["i2c_address"] = {
             "type": "string",
             "label": "I2C Address (hex, e.g. 0x27)",
+            "default": DEFAULT_I2C_ADDRESS,
         }
-        schema["rs_pin"] = {"type": "int", "min": 0, "max": 40, "label": "RS Pin (GPIO)"}
-        schema["e_pin"] = {"type": "int", "min": 0, "max": 40, "label": "E Pin (GPIO)"}
+        schema["rs_pin"] = {
+            "type": "int",
+            "min": 0,
+            "max": 40,
+            "label": "RS Pin (GPIO)",
+            "default": 7,
+        }
+        schema["e_pin"] = {
+            "type": "int",
+            "min": 0,
+            "max": 40,
+            "label": "E Pin (GPIO)",
+            "default": 8,
+        }
         schema["rw_pin"] = {
             "type": "int",
             "min": -1,
             "max": 40,
             "label": "R/W Pin (GPIO, -1 = tied to GND)",
+            "default": NOT_CONNECTED,
         }
-        schema["d4_pin"] = {"type": "int", "min": 0, "max": 40, "label": "D4 Pin (GPIO)"}
-        schema["d5_pin"] = {"type": "int", "min": 0, "max": 40, "label": "D5 Pin (GPIO)"}
-        schema["d6_pin"] = {"type": "int", "min": 0, "max": 40, "label": "D6 Pin (GPIO)"}
-        schema["d7_pin"] = {"type": "int", "min": 0, "max": 40, "label": "D7 Pin (GPIO)"}
+        schema["d4_pin"] = {
+            "type": "int",
+            "min": 0,
+            "max": 40,
+            "label": "D4 Pin (GPIO)",
+            "default": 25,
+        }
+        schema["d5_pin"] = {
+            "type": "int",
+            "min": 0,
+            "max": 40,
+            "label": "D5 Pin (GPIO)",
+            "default": 24,
+        }
+        schema["d6_pin"] = {
+            "type": "int",
+            "min": 0,
+            "max": 40,
+            "label": "D6 Pin (GPIO)",
+            "default": 23,
+        }
+        schema["d7_pin"] = {
+            "type": "int",
+            "min": 0,
+            "max": 40,
+            "label": "D7 Pin (GPIO)",
+            "default": 18,
+        }
         return schema

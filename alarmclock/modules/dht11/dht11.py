@@ -39,7 +39,7 @@ class DHT11Module(Module):
         self._driver = self._make_driver()
 
     def _make_driver(self) -> Any:
-        if self.settings.get("driver", "mock") == "real":
+        if self.config.get("driver", "mock") == "real":
             from alarmclock.modules.dht11.real import RealDHT11Driver
 
             return RealDHT11Driver(self.pin)
@@ -68,7 +68,7 @@ class DHT11Module(Module):
         )
 
     async def _poll_loop(self) -> None:
-        interval = self.settings.get("read_interval_seconds", DEFAULT_READ_INTERVAL_SECONDS)
+        interval = self.settings["read_interval_seconds"]
         while True:
             await self._read_once()
             await asyncio.sleep(interval)
@@ -90,18 +90,14 @@ class DHT11Module(Module):
                 pass
             self._poll_task = None
 
-    async def get_settings_schema(self) -> dict[str, dict[str, Any]]:
-        schema = dict(await super().get_settings_schema())
-        schema["pin"] = {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"}
-        schema["driver"] = {
-            "type": "select",
-            "options": ["mock", "real"],
-            "label": "Driver",
-        }
+    def get_settings_schema(self) -> dict[str, dict[str, Any]]:
+        schema = dict(super().get_settings_schema())
+        schema["pin"] = {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin", "default": 4}
         schema["read_interval_seconds"] = {
             "type": "float",
             "min": 1,
             "max": 60,
             "label": "Read interval (s)",
+            "default": DEFAULT_READ_INTERVAL_SECONDS,
         }
         return schema

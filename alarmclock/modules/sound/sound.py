@@ -20,7 +20,7 @@ class SoundModule(OutputModule):
         self.bus.subscribe("alarm.stopped", self._on_alarm_stopped)
 
     def _make_driver(self) -> Any:
-        if self.settings.get("driver", "mock") == "real":
+        if self.config.get("driver", "mock") == "real":
             from alarmclock.modules.sound.real import RealSpeakerDriver
 
             return RealSpeakerDriver(self.pin)
@@ -43,11 +43,7 @@ class SoundModule(OutputModule):
         elif event == "alarm.stopped":
             await self._on_alarm_stopped(payload)
 
-    async def get_settings_schema(self) -> dict[str, dict[str, Any]]:
-        schema = dict(await super().get_settings_schema())
-        schema["driver"] = {
-            "type": "select",
-            "options": ["mock", "real"],
-            "label": "Driver",
-        }
+    def get_settings_schema(self) -> dict[str, dict[str, Any]]:
+        schema = dict(super().get_settings_schema())
+        schema["pin"] = {**schema["pin"], "default": 18}
         return schema

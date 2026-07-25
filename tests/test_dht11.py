@@ -13,20 +13,22 @@ from alarmclock.modules.dht11.mock import MockDHT11Driver
 
 
 def make_module(**extra_settings) -> DHT11Module:
-    config = {"pin": 4, **extra_settings}
-    return DHT11Module("dht11", EventBus(), config)
+    module = DHT11Module("dht11", EventBus())
+    module.settings.update(extra_settings)
+    return module
 
 
-def test_settings_schema_includes_pin_driver_and_interval():
-    async def scenario():
-        module = make_module()
-        schema = await module.get_settings_schema()
-        assert schema["pin"] == {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"}
-        assert schema["driver"]["type"] == "select"
-        assert schema["driver"]["options"] == ["mock", "real"]
-        assert schema["read_interval_seconds"]["type"] == "float"
+def test_settings_schema_includes_pin_and_interval():
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert schema["pin"] == {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin", "default": 4}
+    assert schema["read_interval_seconds"]["type"] == "float"
 
-    asyncio.run(scenario())
+
+def test_settings_schema_does_not_include_driver():
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert "driver" not in schema
 
 
 def test_pin_property_reads_from_settings():
@@ -47,7 +49,8 @@ def test_defaults_to_mock_driver():
 def test_poll_loop_emits_reading_events():
     async def scenario():
         bus = EventBus()
-        module = DHT11Module("dht11", bus, {"pin": 4, "read_interval_seconds": 0.01})
+        module = DHT11Module("dht11", bus)
+        module.settings["read_interval_seconds"] = 0.01
         await module.init()
         module._driver.temperature_c = 23.5
         module._driver.humidity = 40.0
@@ -72,7 +75,8 @@ def test_poll_loop_emits_reading_events():
 def test_failed_read_is_skipped_not_raised():
     async def scenario():
         bus = EventBus()
-        module = DHT11Module("dht11", bus, {"pin": 4, "read_interval_seconds": 0.01})
+        module = DHT11Module("dht11", bus)
+        module.settings["read_interval_seconds"] = 0.01
         await module.init()
         module._driver.fail = True
 
@@ -149,7 +153,7 @@ def test_real_dht11_driver_returns_none_on_failed_read():
 def test_dht11_module_selects_real_driver_when_configured():
     _install_fake_adafruit_dht()
     try:
-        module = DHT11Module("dht11", EventBus(), {"pin": 4, "driver": "real"})
+        module = DHT11Module("dht11", EventBus(), {"driver": "real"})
         asyncio.run(module.init())
 
         from alarmclock.modules.dht11.real import RealDHT11Driver

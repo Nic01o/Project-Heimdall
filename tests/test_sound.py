@@ -13,19 +13,21 @@ from alarmclock.modules.sound.sound import SoundModule
 
 
 def make_module(**extra_settings) -> SoundModule:
-    config = {"pin": 18, **extra_settings}
-    return SoundModule("sound", EventBus(), config)
+    module = SoundModule("sound", EventBus())
+    module.settings.update(extra_settings)
+    return module
 
 
-def test_settings_schema_includes_pin_and_driver():
-    async def scenario():
-        module = make_module()
-        schema = await module.get_settings_schema()
-        assert schema["pin"] == {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"}
-        assert schema["driver"]["type"] == "select"
-        assert schema["driver"]["options"] == ["mock", "real"]
+def test_settings_schema_includes_pin():
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert schema["pin"] == {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin", "default": 18}
 
-    asyncio.run(scenario())
+
+def test_settings_schema_does_not_include_driver():
+    module = make_module()
+    schema = module.get_settings_schema()
+    assert "driver" not in schema
 
 
 def test_pin_property_reads_from_settings():
@@ -46,7 +48,7 @@ def test_defaults_to_mock_driver():
 def test_alarm_triggered_turns_speaker_on_and_stopped_turns_it_off():
     async def scenario():
         bus = EventBus()
-        module = SoundModule("sound", bus, {"pin": 18})
+        module = SoundModule("sound", bus)
         await module.init()
         await module.enable()
 
@@ -134,7 +136,7 @@ def test_real_speaker_driver_sets_up_and_writes_to_gpio():
 def test_sound_module_selects_real_driver_when_configured():
     fake_gpio = _install_fake_rpi_gpio()
     try:
-        module = SoundModule("sound", EventBus(), {"pin": 18, "driver": "real"})
+        module = SoundModule("sound", EventBus(), {"driver": "real"})
         asyncio.run(module.init())
 
         from alarmclock.modules.sound.real import RealSpeakerDriver

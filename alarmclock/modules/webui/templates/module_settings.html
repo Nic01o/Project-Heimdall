@@ -10,7 +10,7 @@
 </h1>
 <form method="post" action="/ui/modules/{{ module.name }}/settings">
   {% for key, field in schema.items() %}
-    {{ widgets.render_field(key, field, values.get(key)) }}
+    {{ widgets.render_field(key, field, values.get(key), key in locked_fields) }}
   {% else %}
     <p>This module has no configurable settings.</p>
   {% endfor %}

@@ -20,9 +20,15 @@ DUMMY_SCHEMA = {
         "max": 100,
         "label": "Brightness",
         "requires_restart": True,
+        "default": 50,
     },
-    "mode": {"type": "select", "options": ["fade", "instant"], "label": "Mode"},
-    "active": {"type": "bool", "label": "Active"},
+    "mode": {
+        "type": "select",
+        "options": ["fade", "instant"],
+        "label": "Mode",
+        "default": "fade",
+    },
+    "flag": {"type": "bool", "label": "Flag", "default": True},
 }
 
 
@@ -42,15 +48,15 @@ class DummyModule(Module):
     async def on_event(self, event: str, payload: Any = None) -> None:
         pass
 
-    async def get_settings_schema(self) -> dict:
-        return DUMMY_SCHEMA
+    def get_settings_schema(self) -> dict:
+        return {**super().get_settings_schema(), **DUMMY_SCHEMA}
 
 
 def make_client() -> tuple[TestClient, Scheduler, WebUIModule, DummyModule]:
     bus = EventBus()
     scheduler = Scheduler(bus, timezone="UTC")
     webui = WebUIModule("webui", bus, {})
-    dummy = DummyModule("dummy", bus, {"brightness": 50, "mode": "fade", "active": True})
+    dummy = DummyModule("dummy", bus)
     webui.attach_context(scheduler, [webui, dummy])
     client = TestClient(webui.app, follow_redirects=False)
     return client, scheduler, webui, dummy
@@ -388,32 +394,46 @@ def test_ui_update_module_settings_persists_and_redirects():
     client, _scheduler, _webui, dummy = make_client()
     response = client.post(
         "/ui/modules/dummy/settings",
-        data={"brightness": "75", "mode": "instant", "active": "on"},
+        data={"brightness": "75", "mode": "instant", "flag": "on"},
     )
     assert response.status_code == 303
     assert response.headers["location"] == "/ui/modules/dummy/settings"
-    assert dummy.settings == {"brightness": 75, "mode": "instant", "active": True}
+    assert dummy.settings == {"active": True, "brightness": 75, "mode": "instant", "flag": True}
 
 
 def test_ui_update_module_settings_unchecked_bool_becomes_false():
     client, _scheduler, _webui, dummy = make_client()
     response = client.post(
         "/ui/modules/dummy/settings",
-        data={"brightness": "50", "mode": "fade"},  # "active" checkbox omitted -> unchecked
+        data={"brightness": "50", "mode": "fade"},  # "flag" checkbox omitted -> unchecked
     )
     assert response.status_code == 303
-    assert dummy.settings["active"] is False
+    assert dummy.settings["flag"] is False
+
+
+def test_ui_update_module_settings_does_not_touch_active():
+    # `active` is excluded from the generic settings form (see
+    # webui.py:_editable_schema) - saving other settings must never flip it,
+    # even though it's absent from the submitted form data just like an
+    # unchecked checkbox would be.
+    client, _scheduler, _webui, dummy = make_client()
+    response = client.post(
+        "/ui/modules/dummy/settings",
+        data={"brightness": "50", "mode": "fade", "flag": "on"},
+    )
+    assert response.status_code == 303
+    assert dummy.settings["active"] is True
 
 
 def test_ui_update_module_settings_rejects_invalid_value_with_error_redirect():
     client, _scheduler, _webui, dummy = make_client()
     response = client.post(
         "/ui/modules/dummy/settings",
-        data={"brightness": "999", "mode": "fade", "active": "on"},
+        data={"brightness": "999", "mode": "fade", "flag": "on"},
     )
     assert response.status_code == 303
     assert response.headers["location"].startswith("/ui/modules/dummy/settings?error=")
-    assert dummy.settings == {"brightness": 50, "mode": "fade", "active": True}
+    assert dummy.settings == {"active": True, "brightness": 50, "mode": "fade", "flag": True}
 
 
 def test_ui_settings_page_for_unknown_module_returns_404():
