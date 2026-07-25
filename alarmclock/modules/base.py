@@ -35,6 +35,13 @@ class Module(abc.ABC):
         self.config = config or {}
         self.store = store
         self.enabled = False
+        # Set by update_settings() when a schema field flagged
+        # `requires_restart: True` actually changes value. A subclass's
+        # enable() is responsible for clearing it once it has re-applied
+        # whatever settings triggered it - only enable() knows which of its
+        # own fields it just consumed. Modules with no requires_restart
+        # fields never need to touch this.
+        self.needs_restart = False
         self.logger = logging.getLogger(f"alarmclock.modules.{name}")
         self.settings: dict[str, Any] = {
             key: value for key, value in self.config.items() if key not in _RESERVED_CONFIG_KEYS
@@ -89,13 +96,28 @@ class Module(abc.ABC):
 
         Generic based on the field-type vocabulary; only override for a real
         special case.
+
+        A field can opt into `"requires_restart": True` in its schema entry;
+        if such a field's value actually changes, `needs_restart` is set so
+        the UI can prompt for a manual restart() instead of silently doing
+        nothing until the process is restarted.
         """
         schema = await self.get_settings_schema()
         validated = validate_against_schema(values, schema)
+        for key, new_value in validated.items():
+            if schema[key].get("requires_restart") and self.settings.get(key) != new_value:
+                self.needs_restart = True
         self.settings = {**self.settings, **validated}
         if self.store is not None:
             self.store.set(f"modules.{self.name}", self.settings)
         await self.bus.emit(f"{self.name}.settings_changed", self.settings)
+
+    async def restart(self) -> None:
+        """Disable then re-enable, so a subclass's enable() can pick up
+        changed requires_restart settings. Does not clear `needs_restart`
+        itself - that's enable()'s job (see `needs_restart` above)."""
+        await self.disable()
+        await self.enable()
 
 
 class OutputModule(Module):

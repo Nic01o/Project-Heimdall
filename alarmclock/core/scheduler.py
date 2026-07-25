@@ -66,7 +66,7 @@ class Scheduler:
 
     def _time_for_day(self, plan: SleepPlan, day: Weekday) -> datetime.time | None:
         for group in plan.groups:
-            if day in group.days:
+            if group.enabled and day in group.days:
                 return group.time
         return None
 
@@ -77,9 +77,12 @@ class Scheduler:
         raise ValueError(f"unknown sleep plan group {group_id!r}")
 
     def _assigned_days(self) -> set[Weekday]:
+        """Days claimed by currently *enabled* groups. A disabled (hidden)
+        group's days are released so another group can claim them."""
         assigned: set[Weekday] = set()
         for group in self._plan.groups:
-            assigned |= group.days
+            if group.enabled:
+                assigned |= group.days
         return assigned
 
     def _next_date_for_weekday(
@@ -132,6 +135,42 @@ class Scheduler:
         self._changed.set()
         self._persist()
 
+    def update_group(self, group_id: str, days: frozenset[Weekday], time: datetime.time) -> None:
+        """Permanently replace a group's weekdays and time (used by the
+        edit-in-place row in the UI). Days already owned by this same group
+        are exempt from the conflict check."""
+        group = self._find_group(group_id)
+        if not days:
+            raise ValueError("SleepPlanGroup needs at least one weekday")
+        conflicting = (days - group.days) & self._assigned_days()
+        if conflicting:
+            names = ", ".join(day.name.capitalize() for day in sorted(conflicting))
+            raise ValueError(f"already assigned to a sleep plan: {names}")
+        group.days = frozenset(days)
+        group.time = time
+        self._changed.set()
+        self._persist()
+
+    def set_group_enabled(self, group_id: str, enabled: bool) -> None:
+        """Pause or resume a single group without deleting it or releasing
+        its weekdays. Disabling a group frees its weekdays for other groups;
+        re-enabling it re-claims them, so it is rejected if another enabled
+        group has since taken one of those days."""
+        group = self._find_group(group_id)
+        if enabled and not group.enabled:
+            conflicting = group.days & self._assigned_days()
+            if conflicting:
+                names = ", ".join(day.name.capitalize() for day in sorted(conflicting))
+                raise ValueError(f"already assigned to a sleep plan: {names}")
+        group.enabled = enabled
+        self._changed.set()
+        self._persist()
+
+    def toggle_group_enabled(self, group_id: str) -> bool:
+        group = self._find_group(group_id)
+        self.set_group_enabled(group_id, not group.enabled)
+        return group.enabled
+
     def delete_group(self, group_id: str) -> None:
         group = self._find_group(group_id)
         self._plan.groups.remove(group)
@@ -153,6 +192,87 @@ class Scheduler:
         self._plan.enabled = enabled
         self._changed.set()
         self._persist()
+
+    # -- master toggle / "next alarm" override -----------------------------
+    # The web UI's top-level toggle only ever acts on *one* occurrence: the
+    # single upcoming date implied by the recurring groups (ignoring any
+    # override already sitting on it). That date is the "reference date" -
+    # skipping it sets overrides[date] = None, retiming it sets
+    # overrides[date] = <time>, and both share the same dict entry, so
+    # setting a time always supersedes an active skip and vice versa.
+
+    def _next_reference_date(self, after: datetime.datetime) -> datetime.date | None:
+        for offset in range(8):
+            candidate_date = (after + datetime.timedelta(days=offset)).date()
+            day_time = self._time_for_day(self._plan, Weekday(candidate_date.weekday()))
+            if day_time is None:
+                continue
+            candidate_dt = datetime.datetime.combine(candidate_date, day_time, tzinfo=after.tzinfo)
+            if candidate_dt > after:
+                return candidate_date
+        return None
+
+    def get_alarm_reference_date(self, now: datetime.datetime | None = None) -> datetime.date | None:
+        """The date the master toggle / next-alarm override currently acts
+        on. Falls back to the soonest future date already carrying a
+        standalone override when no recurring group exists at all, so a
+        one-off alarm can still be set/cleared with an empty plan."""
+        now = now or self._now()
+        reference = self._next_reference_date(now)
+        if reference is not None:
+            return reference
+        future_overrides = [date for date in self._plan.overrides if date >= now.date()]
+        return min(future_overrides) if future_overrides else None
+
+    def is_next_alarm_skipped(self, now: datetime.datetime | None = None) -> bool:
+        now = now or self._now()
+        reference = self.get_alarm_reference_date(now)
+        return (
+            reference is not None
+            and reference in self._plan.overrides
+            and self._plan.overrides[reference] is None
+        )
+
+    def skip_next_alarm(self, now: datetime.datetime | None = None) -> bool:
+        """Skip the single next occurrence. Returns False (no-op) if there's
+        nothing scheduled to skip."""
+        now = now or self._now()
+        reference = self.get_alarm_reference_date(now)
+        if reference is None:
+            return False
+        self._plan.overrides[reference] = None
+        self._changed.set()
+        self._persist()
+        return True
+
+    def clear_alarm_override(self, now: datetime.datetime | None = None) -> bool:
+        """Clear whatever override (skip or retimed) currently sits on the
+        reference date, reverting to the plain recurring schedule."""
+        now = now or self._now()
+        reference = self.get_alarm_reference_date(now)
+        if reference is None or reference not in self._plan.overrides:
+            return False
+        del self._plan.overrides[reference]
+        self._changed.set()
+        self._persist()
+        return True
+
+    def override_next_alarm_time(
+        self, time: datetime.time, now: datetime.datetime | None = None
+    ) -> datetime.date:
+        """Replace the next occurrence's time for this one instance only.
+        With no recurring groups configured, anchors to today (if `time`
+        hasn't passed yet) or tomorrow, so a standalone one-off alarm can
+        still be set."""
+        now = now or self._now()
+        reference = self.get_alarm_reference_date(now)
+        if reference is None:
+            candidate = datetime.datetime.combine(now.date(), time, tzinfo=now.tzinfo)
+            reference = now.date() if candidate > now else now.date() + datetime.timedelta(days=1)
+        self._plan.overrides[reference] = time
+        self._changed.set()
+        self._persist()
+        return reference
 
     # -- trigger computation (pure, unit-testable) -------------------------
 

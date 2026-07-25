@@ -11,17 +11,7 @@ modules:
     class: 'alarmclock.modules.webui.webui:WebUIModule'
     host: '0.0.0.0'
     port: 5000
-
-  sound:
-    enabled: false
-    class: 'alarmclock.modules.sound.sound:SoundModule'
-    pin: 18
-    driver: 'mock'
-
-  light:
-    enabled: false
-    gpio_pin: 17
-    brightness: 100
+    color_profile: 'sunrise'
 
   button:
     enabled: true
@@ -32,7 +22,27 @@ modules:
     combo_window_seconds: 0.4
     flags: ['press', 'release', 'click', 'double_click', 'multi_click', 'long_press']
 
-#  lcd:
+  led:
+    enabled: true
+    class: 'alarmclock.modules.led.led:LEDModule'
+    pin: 22
+    driver: 'mock'
+    blink_interval_seconds: 0.3
+    reacts_to: [ 'press', 'release', 'click', 'double_click', 'multi_click', 'long_press' ]
+
+
+#  sound:
+#    enabled: false
+#    class: 'alarmclock.modules.sound.sound:SoundModule'
+#    pin: 18
+#    driver: 'mock'
+#
+#  light:
+#    enabled: false
+#    gpio_pin: 17
+#    brightness: 100
+
+  #  lcd:
 #    enabled: false
 #    class: 'alarmclock.modules.lcd.lcd:LCDModule'
 #    driver: 'mock'
@@ -48,18 +58,10 @@ modules:
 #    cols: 16
 #    rows: 2
 
-  led:
-    enabled: true
-    class: 'alarmclock.modules.led.led:LEDModule'
-    pin: 22
-    driver: 'mock'
-    blink_interval_seconds: 0.3
-    reacts_to: ['press', 'release', 'click', 'double_click', 'multi_click', 'long_press']
-
-  dht11:
-    enabled: false
-    class: 'alarmclock.modules.dht11.dht11:DHT11Module'
-    pin: 4
-    driver: 'mock'
-    read_interval_seconds: 2.0
+#  dht11:
+#    enabled: false
+#    class: 'alarmclock.modules.dht11.dht11:DHT11Module'
+#    pin: 4
+#    driver: 'mock'
+#    read_interval_seconds: 2.0
 

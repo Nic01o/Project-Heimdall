@@ -32,9 +32,27 @@ from alarmclock.modules.settings_types import FIELD_TYPES, SettingsValidationErr
 
 logger = logging.getLogger("alarmclock.modules.webui")
 
+WEEKDAY_LABELS: dict[Weekday, str] = {
+    Weekday.MONDAY: "Mo",
+    Weekday.TUESDAY: "Di",
+    Weekday.WEDNESDAY: "Mi",
+    Weekday.THURSDAY: "Do",
+    Weekday.FRIDAY: "Fr",
+    Weekday.SATURDAY: "Sa",
+    Weekday.SUNDAY: "So",
+}
+
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SESSION_COOKIE_NAME = "session"
+
+COLOR_PROFILES: dict[str, dict[str, str]] = {
+    "sunrise": {"accent": "#ff8a5c", "accent_strong": "#f2673f"},
+    "ocean": {"accent": "#4bb8d1", "accent_strong": "#1f6f85"},
+    "forest": {"accent": "#6fae62", "accent_strong": "#3f7a34"},
+    "mono": {"accent": "#9a9a9a", "accent_strong": "#5a5a5a"},
+    "pink": {"accent": "#ff8ac2", "accent_strong": "#e2519b"},
+}
 
 
 def _resolve_widgets(schema: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -92,20 +110,6 @@ def _safe_next(candidate: str) -> str:
     return "/ui/"
 
 
-def _overrides_by_weekday(
-    plan: Any,
-) -> dict[Weekday, tuple[datetime.date, datetime.time | None]]:
-    """Map each weekday to its earliest pending override, if any. Used to
-    annotate both group rows and free-day rows in the UI without duplicating
-    the plan's date bookkeeping in the template."""
-    by_weekday: dict[Weekday, tuple[datetime.date, datetime.time | None]] = {}
-    for date, time in plan.overrides.items():
-        weekday = Weekday(date.weekday())
-        if weekday not in by_weekday or date < by_weekday[weekday][0]:
-            by_weekday[weekday] = (date, time)
-    return by_weekday
-
-
 class GroupCreate(BaseModel):
     days: list[int]
     time: str
@@ -148,6 +152,7 @@ class WebUIModule(Module):
         self.app = FastAPI(title="Alarm Clock")
         self.app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
         self._templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+        self._templates.env.globals["webui_accent_colors"] = self._resolve_accent_colors
         self._register_auth()
         self._register_login_routes()
         self._register_routes()
@@ -165,7 +170,7 @@ class WebUIModule(Module):
         self.bus.subscribe(f"{self.name}.settings_changed", self._on_settings_changed)
 
     async def _on_settings_changed(self, payload: dict[str, Any]) -> None:
-        self.logger.info("settings changed (%s) - restart webui to apply host/port", payload)
+        self.logger.info("settings changed: %s", payload)
 
     _STARTUP_POLL_INTERVAL = 0.01
     _STARTUP_TIMEOUT = 5.0
@@ -203,6 +208,7 @@ class WebUIModule(Module):
         self._server = server
         self._server_task = task
         self.enabled = True
+        self.needs_restart = False
         self.logger.info("webui listening on %s:%s", host, port)
 
     async def disable(self) -> None:
@@ -221,13 +227,50 @@ class WebUIModule(Module):
 
     async def get_settings_schema(self) -> dict[str, dict[str, Any]]:
         return {
-            "host": {"type": "string", "label": "Host"},
-            "port": {"type": "int", "min": 1, "max": 65535, "label": "Port"},
+            "host": {"type": "string", "label": "Host", "requires_restart": True},
+            "port": {
+                "type": "int",
+                "min": 1,
+                "max": 65535,
+                "label": "Port",
+                "requires_restart": True,
+            },
             "password": {
                 "type": "password",
                 "label": "Password (empty disables the login prompt)",
             },
+            "color_profile": {
+                "type": "select",
+                "options": [*COLOR_PROFILES, "custom"],
+                "label": "Farbprofil",
+                # Consumed client-side by module_settings.html to live-preview
+                # a profile before it's saved, without a round-trip per pick.
+                "profiles": COLOR_PROFILES,
+            },
+            "custom_accent": {
+                "type": "color",
+                "label": 'Akzentfarbe',
+            },
+            "custom_accent_strong": {
+                "type": "color",
+                "label": 'kräftiger Akzent',
+            },
         }
+
+    def _resolve_accent_colors(self) -> dict[str, str]:
+        """Look up the accent colors the currently selected color profile
+        implies - used by base.html to theme every page's "important
+        elements" (nav, headings, buttons, links, focus rings) from a single
+        setting, without every route having to thread it through manually."""
+        profile = self.settings.get("color_profile", "sunrise")
+        if profile == "custom":
+            fallback = COLOR_PROFILES["sunrise"]
+            return {
+                "accent": self.settings.get("custom_accent") or fallback["accent"],
+                "accent_strong": self.settings.get("custom_accent_strong")
+                or fallback["accent_strong"],
+            }
+        return COLOR_PROFILES.get(profile, COLOR_PROFILES["sunrise"])
 
     async def update_settings(self, values: dict[str, Any]) -> None:
         await super().update_settings(values)
@@ -388,6 +431,7 @@ class WebUIModule(Module):
                 {
                     "name": module.name,
                     "enabled": module.enabled,
+                    "needs_restart": module.needs_restart,
                     "display_name": module.display_name,
                     "icon": module.icon,
                 }
@@ -402,6 +446,11 @@ class WebUIModule(Module):
         @app.post("/modules/{name}/disable")
         async def disable_module(name: str) -> dict[str, str]:
             await self._get_module(name).disable()
+            return {"status": "ok"}
+
+        @app.post("/modules/{name}/restart")
+        async def restart_module(name: str) -> dict[str, str]:
+            await self._get_module(name).restart()
             return {"status": "ok"}
 
         @app.get("/modules/{name}/settings/schema")
@@ -434,58 +483,94 @@ class WebUIModule(Module):
             return RedirectResponse("/ui/", status_code=303)
 
         @app.get("/ui/", include_in_schema=False)
-        async def ui_index(request: Request, error: str | None = None):
+        async def ui_index(
+            request: Request,
+            error: str | None = None,
+            edit: str | None = None,
+            confirm_delete: str | None = None,
+        ):
             scheduler = self._get_scheduler()
             plan = scheduler.get_plan()
-            overrides_by_weekday = _overrides_by_weekday(plan)
+            now = datetime.datetime.now(scheduler.tz)
+
+            reference_date = scheduler.get_alarm_reference_date(now)
+            is_skipped = scheduler.is_next_alarm_skipped(now)
+            override_time: datetime.time | None = None
+            if reference_date is not None and not is_skipped and reference_date in plan.overrides:
+                override_time = plan.overrides[reference_date]
+
+            affected_group_id = None
+            if reference_date is not None:
+                affected_weekday = Weekday(reference_date.weekday())
+                affected_group_id = next(
+                    (
+                        group.id
+                        for group in plan.groups
+                        if group.enabled and affected_weekday in group.days
+                    ),
+                    None,
+                )
+
+            trigger = scheduler.next_trigger(plan, now)
+            if trigger is None:
+                next_alarm_hint = "Kein Wecker geplant"
+            else:
+                delta_days = (trigger.date() - now.date()).days
+                if delta_days == 0:
+                    day_word = "heute"
+                elif delta_days == 1:
+                    day_word = "morgen"
+                else:
+                    day_word = WEEKDAY_LABELS[Weekday(trigger.date().weekday())]
+                next_alarm_hint = f"Klingelt {day_word} um {trigger.strftime('%H:%M')} Uhr"
+
+            day_owner: dict[Weekday, str] = {}
+            for group in plan.groups:
+                if not group.enabled:
+                    continue
+                for day in group.days:
+                    day_owner[day] = group.id
 
             groups = []
             for group in plan.groups:
-                sorted_days = sorted(group.days, key=lambda d: d.value)
+                reenable_blocked_by = (
+                    sorted(group.days & day_owner.keys(), key=lambda d: d.value)
+                    if not group.enabled
+                    else []
+                )
                 groups.append(
                     {
                         "id": group.id,
-                        "days": sorted_days,
+                        "days": sorted(group.days, key=lambda d: d.value),
                         "time": group.time,
-                        "overrides": [
-                            (day, *overrides_by_weekday[day])
-                            for day in sorted_days
-                            if day in overrides_by_weekday
+                        "enabled": group.enabled,
+                        "reenable_blocked": bool(reenable_blocked_by),
+                        "reenable_blocked_days": [
+                            WEEKDAY_LABELS[day] for day in reenable_blocked_by
                         ],
+                        "is_editing": edit == group.id,
+                        "is_confirming_delete": confirm_delete == group.id,
                     }
                 )
-
-            assigned_days = {day for group in plan.groups for day in group.days}
-            free_days = [
-                {"day": day, "override": overrides_by_weekday.get(day)}
-                for day in Weekday
-                if day not in assigned_days
-            ]
-
-            next_trigger = scheduler.next_trigger(plan, datetime.datetime.now(scheduler.tz))
-            next_alarm = None
-            next_group_id = None
-            if next_trigger is not None:
-                next_weekday = Weekday(next_trigger.weekday())
-                owning_group = next(
-                    (group for group in plan.groups if next_weekday in group.days), None
-                )
-                next_alarm = {
-                    "weekday": next_weekday.name.capitalize(),
-                    "date": next_trigger.date(),
-                    "time": next_trigger.time(),
-                }
-                next_group_id = owning_group.id if owning_group is not None else None
 
             modules = []
             for module in self._modules.values():
                 schema = await module.get_settings_schema()
+                if module.needs_restart:
+                    status_class, status_label = "restart", "Neustart nötig"
+                elif module.enabled:
+                    status_class, status_label = "on", "Läuft"
+                else:
+                    status_class, status_label = "off", "Aus"
                 modules.append(
                     {
                         "name": module.name,
                         "display_name": module.display_name,
                         "enabled": module.enabled,
+                        "needs_restart": module.needs_restart,
                         "has_settings": bool(schema),
+                        "status_class": status_class,
+                        "status_label": status_label,
                     }
                 )
             return templates.TemplateResponse(
@@ -494,9 +579,14 @@ class WebUIModule(Module):
                 {
                     "plan": plan,
                     "groups": groups,
-                    "free_days": free_days,
-                    "next_alarm": next_alarm,
-                    "next_group_id": next_group_id,
+                    "all_weekdays": list(Weekday),
+                    "weekday_labels": WEEKDAY_LABELS,
+                    "day_owner": day_owner,
+                    "is_skipped": is_skipped,
+                    "override_time": override_time,
+                    "next_alarm_hint": next_alarm_hint,
+                    "affected_group_id": affected_group_id,
+                    "any_editing": edit is not None,
                     "modules": modules,
                     "error": error,
                 },
@@ -506,10 +596,14 @@ class WebUIModule(Module):
         async def ui_create_group(
             time: str = Form(""), days: list[str] = Form([])
         ) -> RedirectResponse:
+            if not days:
+                # No day picked (e.g. Enter pressed while every checkbox was
+                # disabled/unchecked) - the confirm button is already inert
+                # for mouse clicks via CSS; on the server side this is just
+                # a no-op, not an error worth surfacing.
+                return RedirectResponse("/ui/", status_code=303)
             scheduler = self._get_scheduler()
             try:
-                if not days:
-                    raise ValueError("select at least one day")
                 parsed_days = frozenset(Weekday(int(day)) for day in days)
                 parsed_time = datetime.time.fromisoformat(time)
                 scheduler.create_group(parsed_days, parsed_time)
@@ -517,14 +611,25 @@ class WebUIModule(Module):
                 return RedirectResponse(f"/ui/?error={exc}", status_code=303)
             return RedirectResponse("/ui/", status_code=303)
 
-        @app.post("/ui/plan/change", include_in_schema=False)
-        async def ui_change_group(
-            group_id: str = Form(""), time: str = Form(""), scope: str = Form("next")
+        @app.post("/ui/plan/groups/{group_id}/update", include_in_schema=False)
+        async def ui_update_group(
+            group_id: str, time: str = Form(""), days: list[str] = Form([])
         ) -> RedirectResponse:
+            if not days:
+                return RedirectResponse(f"/ui/?edit={group_id}", status_code=303)
             scheduler = self._get_scheduler()
             try:
+                parsed_days = frozenset(Weekday(int(day)) for day in days)
                 parsed_time = datetime.time.fromisoformat(time)
-                scheduler.set_group_time(group_id, parsed_time, permanent=(scope == "permanent"))
+                scheduler.update_group(group_id, parsed_days, parsed_time)
+            except ValueError as exc:
+                return RedirectResponse(f"/ui/?error={exc}&edit={group_id}", status_code=303)
+            return RedirectResponse("/ui/", status_code=303)
+
+        @app.post("/ui/plan/groups/{group_id}/toggle", include_in_schema=False)
+        async def ui_toggle_group(group_id: str) -> RedirectResponse:
+            try:
+                self._get_scheduler().toggle_group_enabled(group_id)
             except ValueError as exc:
                 return RedirectResponse(f"/ui/?error={exc}", status_code=303)
             return RedirectResponse("/ui/", status_code=303)
@@ -537,40 +642,24 @@ class WebUIModule(Module):
                 return RedirectResponse(f"/ui/?error={exc}", status_code=303)
             return RedirectResponse("/ui/", status_code=303)
 
-        @app.post("/ui/plan/days/{day}", include_in_schema=False)
-        async def ui_set_day(
-            day: str, time: str = Form(""), scope: str = Form("next")
-        ) -> RedirectResponse:
+        @app.post("/ui/plan/master/skip", include_in_schema=False)
+        async def ui_skip_next_alarm() -> RedirectResponse:
+            self._get_scheduler().skip_next_alarm()
+            return RedirectResponse("/ui/", status_code=303)
+
+        @app.post("/ui/plan/override", include_in_schema=False)
+        async def ui_set_override(time: str = Form("")) -> RedirectResponse:
             scheduler = self._get_scheduler()
-            weekday = self._get_weekday(day)
-            if scheduler.is_day_assigned(weekday):
-                return RedirectResponse(
-                    f"/ui/?error={weekday.name.capitalize()} already belongs to a sleep plan group",
-                    status_code=303,
-                )
             try:
                 parsed_time = datetime.time.fromisoformat(time)
-                if scope == "permanent":
-                    scheduler.create_group(frozenset({weekday}), parsed_time)
-                else:
-                    scheduler.set_day_once(weekday, parsed_time)
             except ValueError as exc:
                 return RedirectResponse(f"/ui/?error={exc}", status_code=303)
+            scheduler.override_next_alarm_time(parsed_time)
             return RedirectResponse("/ui/", status_code=303)
 
-        @app.post("/ui/plan/disable", include_in_schema=False)
-        async def ui_disable_plan() -> RedirectResponse:
-            self._get_scheduler().set_enabled(False)
-            return RedirectResponse("/ui/", status_code=303)
-
-        @app.post("/ui/plan/stop", include_in_schema=False)
-        async def ui_stop_plan() -> RedirectResponse:
-            await self._get_scheduler().stop_alarm()
-            return RedirectResponse("/ui/", status_code=303)
-
-        @app.post("/ui/plan/snooze", include_in_schema=False)
-        async def ui_snooze_plan(minutes: float = Form(9)) -> RedirectResponse:
-            await self._get_scheduler().snooze_alarm(minutes)
+        @app.post("/ui/plan/override/clear", include_in_schema=False)
+        async def ui_clear_override() -> RedirectResponse:
+            self._get_scheduler().clear_alarm_override()
             return RedirectResponse("/ui/", status_code=303)
 
         @app.post("/ui/modules/{name}/enable", include_in_schema=False)
@@ -582,6 +671,11 @@ class WebUIModule(Module):
         async def ui_disable_module(name: str) -> RedirectResponse:
             await self._get_module(name).disable()
             return RedirectResponse("/ui/", status_code=303)
+
+        @app.post("/ui/modules/{name}/restart", include_in_schema=False)
+        async def ui_restart_module(name: str, next: str = Form("/ui/")) -> RedirectResponse:
+            await self._get_module(name).restart()
+            return RedirectResponse(_safe_next(next), status_code=303)
 
         @app.get("/ui/modules/{name}/settings", include_in_schema=False)
         async def ui_module_settings(request: Request, name: str, error: str | None = None):

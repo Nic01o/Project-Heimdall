@@ -14,7 +14,13 @@ from alarmclock.modules.base import Module
 from alarmclock.modules.webui.webui import WebUIModule
 
 DUMMY_SCHEMA = {
-    "brightness": {"type": "int", "min": 0, "max": 100, "label": "Brightness"},
+    "brightness": {
+        "type": "int",
+        "min": 0,
+        "max": 100,
+        "label": "Brightness",
+        "requires_restart": True,
+    },
 }
 
 
@@ -192,6 +198,36 @@ def test_enable_and_disable_module():
     assert dummy.enabled is False
 
 
+def test_restart_module_endpoint_disables_then_enables():
+    client, _scheduler, _webui, dummy = make_client()
+    dummy.needs_restart = True
+
+    response = client.post("/modules/dummy/restart")
+
+    assert response.status_code == 200
+    assert dummy.enabled is True
+
+
+def test_list_modules_exposes_needs_restart():
+    client, _scheduler, _webui, dummy = make_client()
+    dummy.needs_restart = True
+
+    response = client.get("/modules")
+
+    by_name = {module["name"]: module for module in response.json()}
+    assert by_name["dummy"]["needs_restart"] is True
+    assert by_name["webui"]["needs_restart"] is False
+
+
+def test_update_settings_flags_needs_restart_only_for_flagged_field_change():
+    client, _scheduler, _webui, dummy = make_client()
+
+    response = client.post("/modules/dummy/settings", json={"brightness": 90})
+
+    assert response.status_code == 200
+    assert dummy.needs_restart is True
+
+
 def test_unknown_module_returns_404():
     client, _scheduler, _webui, _dummy = make_client()
     assert client.post("/modules/nonexistent/enable").status_code == 404
@@ -242,6 +278,37 @@ def test_webui_enable_and_disable_lifecycle_starts_and_stops_server_task():
         await webui.disable()
         assert webui.enabled is False
         assert task.done()
+
+    asyncio.run(scenario())
+
+
+def test_webui_enable_clears_needs_restart():
+    async def scenario():
+        bus = EventBus()
+        webui = WebUIModule("webui", bus, {"host": "127.0.0.1", "port": 0})
+        await webui.init()
+        webui.needs_restart = True
+
+        await webui.enable()
+        assert webui.needs_restart is False
+
+        await webui.disable()
+
+    asyncio.run(scenario())
+
+
+def test_webui_update_settings_flags_needs_restart_for_host_and_port_only():
+    async def scenario():
+        bus = EventBus()
+        webui = WebUIModule("webui", bus, {"host": "127.0.0.1", "port": 5000})
+        await webui.init()
+
+        await webui.update_settings({"port": 5001})
+        assert webui.needs_restart is True
+
+        webui.needs_restart = False
+        await webui.update_settings({"color_profile": "ocean"})
+        assert webui.needs_restart is False
 
     asyncio.run(scenario())
 

@@ -8,14 +8,14 @@
 - [x] Event-Bus als asyncio-Pub/Sub bauen
   - [x] Events als serialisierbare Dicts
 - [x] Scheduler (Alarm-Logik, Wiederholungen) hardwareunabhängig + Unit-Tests
-- [ ] Datenmodell für Alarm (Zeit, Wiederholung, Label, verknüpfte Events)
-- [ ] Config in YAML, Loader aktiviert/deaktiviert Module
+- [x] Datenmodell für Alarm (Zeit, Wiederholung, Label, verknüpfte Events)
+- [x] Config in YAML, Loader aktiviert/deaktiviert Module
 - [x] Erstes Mock-Modul bauen, um den kompletten Durchlauf Core -> Bus -> Modul zu verifizieren
-- [ ] Logging-Setup
-- [ ] Exceptions in Modul-Callbacks sauber abfangen – ein Modul-Fehler darf den Core nicht mitreißen (wichtig, da alles in einem Prozess läuft)
-- [ ] Wecker-Logik wie apples Schlafplan:
-  - [ ] Wecker-Profile (z.B. „Wochentage“, „Wochenende“)
-  - [ ] Wecker-Events (z.B. „Wecker klingelt“, „Wecker wird gestoppt“, „Wecker wird verschoben“)
+- [x] Logging-Setup
+- [x] Exceptions in Modul-Callbacks sauber abfangen – ein Modul-Fehler darf den Core nicht mitreißen (wichtig, da alles in einem Prozess läuft)
+- [x] Wecker-Logik wie apples Schlafplan:
+  - [x] Wecker-Profile (z.B. „Wochentage“, „Wochenende“)
+  - [x] Wecker-Events (z.B. „Wecker klingelt“, „Wecker wird gestoppt“, „Wecker wird verschoben“)
 - [x] [PRIORITY] Modul-Settings-Pattern: `get_settings_schema` / `get_settings` / `update_settings` auf Module-Basisklasse (nur Validierung, keine Seiteneffekte; Persistierung fehlt noch, siehe SQLite-TODO)
 - [x] [PRIORITY] Gemeinsames Field-Type-Vokabular (`modules/settings_types.py`, generische Schema-Validierung in Module-Basisklasse)
 - [x] Sound-Modul (Mock + Real via `OutputModule`-Basisklasse und `driver: mock|real` Setting)
@@ -36,11 +36,11 @@
 
 - [ ] Mikrofon-Modul
 - [ ] Textpanel-Anbindung
-- [ ] Mehrere Wecker-Profile
+- [x] Mehrere Wecker-Profile
 - [ ] Kalender-/Cloud-Anbindung
 - [ ] Mobile-optimierte UI / PWA
 - [ ] Schlafstatistik/Verlauf
-- [ ] Lokale GUI
+- [x] Lokale GUI
 - [x] Button-Input (`InputModule`-Basisklasse, Mock-/Real-Treiber, emittiert `button.pressed`/`button.released`)
 - [x] Button-Druckkombis (`button_combos`-Modul: Single/Double/Triple-Click + Long-Press aus den Button-Events)
 - [ ] Wecksound-Bibliothek (mehrere Klänge/Playlists statt nur ein Sound)

@@ -31,11 +31,14 @@ EVERY_DAY = frozenset(Weekday)
 @dataclasses.dataclass
 class SleepPlanGroup:
     """A set of weekdays that share one wake time. Groups are disjoint: a
-    weekday belongs to at most one group at a time."""
+    weekday belongs to at most one group at a time. `enabled=False` pauses
+    the group (it won't fire) without releasing its weekdays back to the
+    pool - the days stay reserved for this group until it's deleted."""
 
     days: frozenset[Weekday]
     time: datetime.time
     id: str = dataclasses.field(default_factory=lambda: uuid.uuid4().hex)
+    enabled: bool = True
 
     def __post_init__(self) -> None:
         if not self.days:
@@ -46,6 +49,7 @@ class SleepPlanGroup:
             "id": self.id,
             "days": sorted(int(day) for day in self.days),
             "time": self.time.isoformat(),
+            "enabled": self.enabled,
         }
 
     @classmethod
@@ -54,6 +58,7 @@ class SleepPlanGroup:
             days=frozenset(Weekday(day) for day in data["days"]),
             time=datetime.time.fromisoformat(data["time"]),
             id=data["id"],
+            enabled=data.get("enabled", True),
         )
 
 

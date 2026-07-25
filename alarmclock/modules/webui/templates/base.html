@@ -4,11 +4,20 @@
   <meta charset="utf-8">
   <title>{% block title %}Alarm Clock{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  {% set _colors = webui_accent_colors() %}
+  <style>
+    :root {
+      --accent: {{ _colors.accent }};
+      --accent-strong: {{ _colors.accent_strong }};
+      --accent-soft-bg: color-mix(in srgb, {{ _colors.accent }} 16%, transparent);
+    }
+  </style>
 </head>
 <body>
   <nav><a href="/ui/">Alarm Clock</a><span class="tagline">Guten Morgen</span></nav>
   <main>
     {% block content %}{% endblock %}
   </main>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -1,128 +1,205 @@
 {% extends "base.html" %}
+{% import "_widgets.html" as widgets %}
 {% block title %}Alarm Clock{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
-<div class="card">
+{% macro day_circles_static(group) %}
+  {% for day in all_weekdays %}
+    {% if day in group.days %}
+      <span class="day-circle own">{{ weekday_labels[day] }}</span>
+    {% elif day in day_owner %}
+      <span class="day-circle taken">{{ weekday_labels[day] }}</span>
+    {% else %}
+      <span class="day-circle free">{{ weekday_labels[day] }}</span>
+    {% endif %}
+  {% endfor %}
+{% endmacro %}
+
+{% macro day_checkboxes(current_days, exclude_group_id) %}
+  {% for day in all_weekdays %}
+    {% set taken = day in day_owner and day_owner[day] != exclude_group_id %}
+    <label class="day-circle-label">
+      <input type="checkbox" name="days" value="{{ day.value }}"
+        {% if day in current_days %}checked{% endif %}
+        {% if taken %}disabled{% endif %}>
+      <span class="day-circle{% if taken %} taken{% endif %}">{{ weekday_labels[day] }}</span>
+    </label>
+  {% endfor %}
+{% endmacro %}
+
+<div class="card sleep-plan">
 <h1>Schlafplan</h1>
 
-{% if not plan.enabled %}
-  <p class="error">Schlafplan ist deaktiviert. Bearbeite den Wecker, um ihn wieder zu aktivieren.</p>
-{% endif %}
-
-<p class="next-alarm">
-  {% if next_alarm %}
-    Nächster Wecker: <strong>{{ next_alarm.weekday }}, {{ next_alarm.date.strftime('%d.%m.') }} um {{ next_alarm.time.strftime('%H:%M') }} Uhr</strong>
+<div class="master-row">
+  <div>
+    <div class="master-label">Wecker aktiv</div>
+    <div class="master-hint">
+      {% if is_skipped %}Setzt nächsten Wecker aus{% else %}{{ next_alarm_hint }}{% endif %}
+    </div>
+  </div>
+  {% if is_skipped %}
+    <form method="post" action="/ui/plan/override/clear">
+      <button type="submit" class="switch" aria-label="Wecker aktiv"></button>
+    </form>
   {% else %}
-    Kein Wecker eingestellt.
-  {% endif %}
-</p>
-
-<div>
-  <form method="post" action="/ui/plan/stop" class="inline">
-    <button type="submit">Wecker stoppen</button>
-  </form>
-  <form method="post" action="/ui/plan/snooze" class="inline">
-    <input type="number" name="minutes" value="9" min="1" style="width:4em">
-    <button type="submit">Schlummern</button>
-  </form>
-</div>
-
-<details>
-  <summary>Wecker bearbeiten</summary>
-
-  {% if plan.enabled %}
-    <form method="post" action="/ui/plan/disable" class="inline">
-      <button type="submit">Schlafplan deaktivieren</button>
+    <form method="post" action="/ui/plan/master/skip">
+      <button type="submit" class="switch is-on" aria-label="Wecker aktiv"></button>
     </form>
   {% endif %}
+</div>
 
-  {% if groups %}
-  <h2>Wecker ändern</h2>
-  <form method="post" action="/ui/plan/change">
-    <fieldset>
-      <legend>Wann soll das gelten?</legend>
-      <label><input type="radio" name="scope" value="next" checked> Nur nächstes Mal</label>
-      <label><input type="radio" name="scope" value="permanent"> Dauerhaft</label>
-    </fieldset>
-    <label>Schlafplan
-      <select name="group_id">
-        {% for group in groups %}
-          <option value="{{ group.id }}" {% if group.id == next_group_id %}selected{% endif %}>
-            {{ group.days | map(attribute='name') | map('capitalize') | join(', ') }} – {{ group.time.strftime('%H:%M') }}
-          </option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Neue Zeit <input type="time" name="time" required></label>
-    <button type="submit">Ändern</button>
+{% if override_time is not none %}
+  <form method="post" action="/ui/plan/override/clear" class="next-field-set">
+    <button type="submit" class="next-field-set-btn">
+      <span class="next-field-set-text">{{ override_time.strftime('%H:%M') }} Uhr</span>
+    </button>
   </form>
+{% else %}
+  <details class="next-field">
+    <summary>Nächsten Wecker ändern</summary>
+    <form method="post" action="/ui/plan/override" class="next-field-edit">
+      <input type="time" name="time" required autofocus>
+      <button type="submit">Setzen</button>
+    </form>
+  </details>
+{% endif %}
 
-  <table>
-    <thead><tr><th>Tage</th><th>Zeit</th><th>Einmalig</th><th></th></tr></thead>
-    <tbody>
-    {% for group in groups %}
-      <tr>
-        <td>{{ group.days | map(attribute='name') | map('capitalize') | join(', ') }}</td>
-        <td>{{ group.time.strftime('%H:%M') }}</td>
-        <td>
-          {% for day, date, time in group.overrides %}
-            {{ day.name.capitalize() }} ({{ date.strftime('%d.%m.') }}): {{ time.strftime('%H:%M') if time else 'aus' }}<br>
-          {% endfor %}
-        </td>
-        <td>
-          <form method="post" action="/ui/plan/groups/{{ group.id }}/delete" class="inline">
-            <button type="submit">Löschen</button>
+<div class="plan-list">
+  {% if not groups %}
+    <p class="list-hint">Noch kein Schlafplan – leg unten los</p>
+  {% endif %}
+
+  {% for group in groups %}
+    {% set has_override = is_skipped or override_time is not none %}
+    {% set is_affected = (group.id == affected_group_id) and has_override %}
+    <div class="plan-row
+      {%- if not group.enabled %} disabled{% endif %}
+      {%- if group.is_editing %} editing{% endif %}
+      {%- if any_editing and not group.is_editing %} dimmed{% endif %}">
+
+      <form method="post" action="/ui/plan/groups/{{ group.id }}/toggle">
+        <button type="submit" class="switch switch-sm{% if group.enabled %} is-on{% endif %}"
+          {% if group.reenable_blocked %}
+            disabled
+            aria-label="Plan aktivieren nicht möglich: {{ group.reenable_blocked_days | join(', ') }} bereits belegt"
+            title="Nicht aktivierbar: {{ group.reenable_blocked_days | join(', ') }} bereits belegt"
+          {% else %}
+            aria-label="Plan aktiv"
+          {% endif %}
+        ></button>
+      </form>
+
+      {% if group.is_editing %}
+        <form method="post" action="/ui/plan/groups/{{ group.id }}/update" class="row-edit-form">
+          <input type="time" name="time" value="{{ group.time.strftime('%H:%M') }}"
+            required autofocus class="time-edit-input">
+          <div class="days">
+            {{ day_checkboxes(group.days, group.id) }}
+          </div>
+          <div class="row-actions">
+            <button type="submit" class="row-action confirm" aria-label="Speichern">&#10003;</button>
+            <a href="/ui/" class="row-action" aria-label="Abbrechen">&#10005;</a>
+          </div>
+        </form>
+      {% else %}
+        {% if is_affected %}
+          <form method="post" action="/ui/plan/override/clear" class="row-main-form">
+            <button type="submit" class="row-main">
+              <span class="time-display">
+                <span class="was">{{ group.time.strftime('%H:%M') }}</span>
+                {%- if override_time is not none %}<span class="now">{{ override_time.strftime('%H:%M') }}</span>{% endif %}
+              </span>
+              <span class="days">{{ day_circles_static(group) }}</span>
+            </button>
           </form>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
+        {% else %}
+          <a href="/ui/?edit={{ group.id }}" class="row-main">
+            <span class="time-display">{{ group.time.strftime('%H:%M') }}</span>
+            <span class="days">{{ day_circles_static(group) }}</span>
+          </a>
+        {% endif %}
 
-  {% if free_days %}
-  <h2>Neuen Schlafplan erstellen</h2>
-  <form method="post" action="/ui/plan/groups">
-    <fieldset>
-      <legend>Freie Tage</legend>
-      {% for free in free_days %}
-        <label><input type="checkbox" name="days" value="{{ free.day.value }}"> {{ free.day.name.capitalize() }}</label>
-      {% endfor %}
-    </fieldset>
-    <label>Zeit <input type="time" name="time" required></label>
-    <button type="submit">Erstellen</button>
+        {% if group.is_confirming_delete %}
+          <form method="post" action="/ui/plan/groups/{{ group.id }}/delete" class="row-actions">
+            <button type="submit" class="row-action delete confirming"
+              aria-label="Wirklich löschen? Nochmal tippen">&#10005;</button>
+          </form>
+        {% else %}
+          <a href="/ui/?confirm_delete={{ group.id }}" class="row-actions">
+            <span class="row-action delete" aria-label="Plan löschen">&#10005;</span>
+          </a>
+        {% endif %}
+      {% endif %}
+    </div>
+  {% endfor %}
+
+  <form method="post" action="/ui/plan/groups" class="plan-row ghost{% if any_editing %} dimmed{% endif %}">
+    <span class="switch switch-sm" aria-hidden="true"></span>
+    <input type="time" name="time" required class="time-edit-input" placeholder="--:--">
+    <div class="days">
+      {{ day_checkboxes([], none) }}
+    </div>
+    <div class="row-actions">
+      <button type="submit" class="row-action confirm" aria-label="Neuen Schlafplan übernehmen">&#10003;</button>
+    </div>
   </form>
-  {% endif %}
-</details>
+</div>
 </div>
 
 <div class="card">
 <h1>Modules</h1>
 <table>
-  <thead><tr><th>Name</th><th>Enabled</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Status</th><th></th></tr></thead>
   <tbody>
   {% for module in modules %}
     <tr>
       <td>{{ module.display_name or module.name }}</td>
-      <td>{{ 'yes' if module.enabled else 'no' }}</td>
       <td>
-        {% if module.enabled %}
-          <form method="post" action="/ui/modules/{{ module.name }}/disable" class="inline">
-            <button type="submit">Disable</button>
-          </form>
-        {% else %}
-          <form method="post" action="/ui/modules/{{ module.name }}/enable" class="inline">
-            <button type="submit">Enable</button>
-          </form>
-        {% endif %}
-        {% if module.has_settings %}
-          <a href="/ui/modules/{{ module.name }}/settings">Settings</a>
-        {% endif %}
+        <span class="status-dot status-{{ module.status_class }}"
+          title="{{ module.status_label }}" aria-label="{{ module.status_label }}"></span>
+      </td>
+      <td>
+        <div class="module-controls">
+          {% if module.enabled %}
+            <form method="post" action="/ui/modules/{{ module.name }}/disable" class="inline">
+              <button type="submit" class="switch switch-sm is-on" aria-label="Modul aktiv"></button>
+            </form>
+          {% else %}
+            <form method="post" action="/ui/modules/{{ module.name }}/enable" class="inline">
+              <button type="submit" class="switch switch-sm" aria-label="Modul aktiv"></button>
+            </form>
+          {% endif %}
+          {% if module.has_settings %}
+            <a href="/ui/modules/{{ module.name }}/settings" class="row-action settings"
+              aria-label="Einstellungen" title="Einstellungen">&#9881;</a>
+          {% endif %}
+          {{ widgets.restart_hint(module, "/ui/") }}
+        </div>
       </td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Progressive enhancement only: the confirm button already fails safe
+  // server-side (silent no-op) if a browser has JS disabled. This just
+  // makes the button truly `disabled` while no weekday is checked, which
+  // is the only thing that also stops Enter's implicit form submission.
+  (function () {
+    function sync(form) {
+      var btn = form.querySelector(".row-action.confirm");
+      if (!btn) return;
+      btn.disabled = !form.querySelector('input[type="checkbox"]:checked');
+    }
+    document.querySelectorAll(".plan-row.ghost, .row-edit-form").forEach(function (form) {
+      sync(form);
+      form.addEventListener("change", function () { sync(form); });
+    });
+  })();
+</script>
 {% endblock %}

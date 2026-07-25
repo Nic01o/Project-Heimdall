@@ -255,6 +255,59 @@ def test_delete_group_leaves_overrides_intact():
     assert sched.get_plan().overrides == {datetime.date(2026, 7, 20): datetime.time(9, 0)}
 
 
+# -- set_group_enabled / toggle_group_enabled -------------------------------
+
+
+def test_disabling_group_frees_its_days():
+    now = dt(2026, 7, 20, 6, 0)
+    sched = make_scheduler(now=lambda: now)
+    group = sched.create_group(frozenset({Weekday.MONDAY, Weekday.TUESDAY}), datetime.time(6, 30))
+    sched.set_group_enabled(group.id, False)
+    assert sched._assigned_days() == set()
+
+
+def test_disabled_groups_days_can_be_claimed_by_a_new_group():
+    now = dt(2026, 7, 20, 6, 0)
+    sched = make_scheduler(now=lambda: now)
+    group = sched.create_group(frozenset({Weekday.MONDAY}), datetime.time(6, 30))
+    sched.set_group_enabled(group.id, False)
+    other = sched.create_group(frozenset({Weekday.MONDAY}), datetime.time(7, 0))
+    assert other in sched.get_plan().groups
+    assert Weekday.MONDAY in sched._assigned_days()
+
+
+def test_reenabling_group_rejects_conflict_with_day_since_claimed():
+    now = dt(2026, 7, 20, 6, 0)
+    sched = make_scheduler(now=lambda: now)
+    group = sched.create_group(frozenset({Weekday.MONDAY}), datetime.time(6, 30))
+    sched.set_group_enabled(group.id, False)
+    sched.create_group(frozenset({Weekday.MONDAY}), datetime.time(7, 0))
+    with pytest.raises(ValueError):
+        sched.set_group_enabled(group.id, True)
+    assert group.enabled is False
+
+
+def test_toggle_group_enabled_rejects_conflict_with_day_since_claimed():
+    now = dt(2026, 7, 20, 6, 0)
+    sched = make_scheduler(now=lambda: now)
+    group = sched.create_group(frozenset({Weekday.MONDAY}), datetime.time(6, 30))
+    sched.toggle_group_enabled(group.id)  # disable, frees Monday
+    sched.create_group(frozenset({Weekday.MONDAY}), datetime.time(7, 0))
+    with pytest.raises(ValueError):
+        sched.toggle_group_enabled(group.id)  # re-enable attempt
+    assert group.enabled is False
+
+
+def test_reenabling_group_with_no_conflict_succeeds():
+    now = dt(2026, 7, 20, 6, 0)
+    sched = make_scheduler(now=lambda: now)
+    group = sched.create_group(frozenset({Weekday.MONDAY}), datetime.time(6, 30))
+    sched.set_group_enabled(group.id, False)
+    sched.set_group_enabled(group.id, True)
+    assert group.enabled is True
+    assert Weekday.MONDAY in sched._assigned_days()
+
+
 # -- set_day_once (unassigned days) -----------------------------------------
 
 

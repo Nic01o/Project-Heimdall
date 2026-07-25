@@ -13,7 +13,13 @@ from alarmclock.modules.base import Module
 from alarmclock.modules.settings_types import SettingsValidationError, validate_against_schema
 
 LIGHT_SCHEMA = {
-    "gpio_pin": {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"},
+    "gpio_pin": {
+        "type": "int",
+        "min": 0,
+        "max": 40,
+        "label": "GPIO Pin",
+        "requires_restart": True,
+    },
     "brightness": {"type": "int", "min": 0, "max": 100, "label": "Brightness"},
     "color": {"type": "color", "label": "Light color"},
     "mode": {"type": "select", "options": ["fade", "instant"], "label": "Transition"},
@@ -140,6 +146,57 @@ def test_module_without_persisted_settings_falls_back_to_config(tmp_path):
     module = LightModule("light", EventBus(), {"gpio_pin": 17, "brightness": 100}, store)
 
     assert module.settings == {"gpio_pin": 17, "brightness": 100}
+
+
+def test_module_starts_with_needs_restart_false():
+    module = LightModule("light", EventBus(), {"gpio_pin": 17, "brightness": 100})
+    assert module.needs_restart is False
+
+
+def test_update_settings_flags_needs_restart_when_requires_restart_field_changes():
+    async def scenario():
+        module = LightModule("light", EventBus(), {"gpio_pin": 17, "brightness": 100})
+
+        await module.update_settings({"gpio_pin": 4})
+
+        assert module.needs_restart is True
+
+    asyncio.run(scenario())
+
+
+def test_update_settings_does_not_flag_needs_restart_for_unflagged_field():
+    async def scenario():
+        module = LightModule("light", EventBus(), {"gpio_pin": 17, "brightness": 100})
+
+        await module.update_settings({"brightness": 50})
+
+        assert module.needs_restart is False
+
+    asyncio.run(scenario())
+
+
+def test_update_settings_does_not_flag_needs_restart_when_value_unchanged():
+    async def scenario():
+        module = LightModule("light", EventBus(), {"gpio_pin": 17, "brightness": 100})
+
+        await module.update_settings({"gpio_pin": 17})
+
+        assert module.needs_restart is False
+
+    asyncio.run(scenario())
+
+
+def test_restart_calls_disable_then_enable():
+    async def scenario():
+        module = LightModule("light", EventBus(), {"gpio_pin": 17, "brightness": 100})
+        await module.disable()
+        assert module.enabled is False
+
+        await module.restart()
+
+        assert module.enabled is True
+
+    asyncio.run(scenario())
 
 
 def test_module_default_get_settings_schema_is_empty():
