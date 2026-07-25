@@ -37,7 +37,7 @@ REACTIONS = ["ignore", "on", "off", "toggle", "flash_1", "flash_2", "flash_3", "
 # How many times to flash for each flash_N reaction.
 _FLASH_TIMES = {"flash_1": 1, "flash_2": 2, "flash_3": 3, "flash_4": 4}
 
-# Out-of-the-box behavior.
+# Out-of-the-box behavior. Default ignore
 _DEFAULT_REACTIONS = {
     "press":    "ignore",
     "release":  "ignore",

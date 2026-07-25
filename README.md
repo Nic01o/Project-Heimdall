@@ -264,9 +264,9 @@ tab for a new module needs zero module-specific frontend code.
 {% endmacro %}
 ```
 
-The settings page (`GET /ui/modules/<name>/settings`) loops over
+The settings page (`GET /modules/<name>/settings`) loops over
 `get_settings_schema()` and renders one field per entry; submitting the form
-(`POST /ui/modules/<name>/settings`) parses the form data back into typed
+(`POST /modules/<name>/settings`) parses the form data back into typed
 values and calls `module.update_settings(...)` - a classic Post/Redirect/Get,
 no JavaScript involved. `webui` discovers modules generically via the module
 registry it's given at startup (see "Web UI & REST API" below) and only
@@ -323,8 +323,9 @@ over these YAML defaults on the next boot - the YAML value is only the
 
 ## Web UI & REST API
 
-When `webui` is enabled, it's both a JSON REST API and a server-rendered
-browser control panel on the same port - `GET /` redirects to `/ui/`.
+When `webui` is enabled, it's both a JSON REST API (under `/api`) and a
+server-rendered browser control panel on the same port - `GET /` serves the
+control panel's home page directly.
 
 Unlike other modules, `webui` gets direct references to the `Scheduler` and
 the full module registry (`attach_context()`, called by the daemon once every
@@ -344,46 +345,46 @@ REST API (JSON):
 
 ```bash
 # Read the whole plan
-curl http://localhost:5000/plan
+curl http://localhost:5000/api/plan
 
 # Create a group covering Monday+Tuesday, or a single still-free day
-curl -X POST http://localhost:5000/plan/groups \
+curl -X POST http://localhost:5000/api/plan/groups \
   -H 'Content-Type: application/json' \
   -d '{"days": [0, 1], "time": "07:00"}'
-curl -X POST http://localhost:5000/plan/days/wednesday \
+curl -X POST http://localhost:5000/api/plan/days/wednesday \
   -d '{"time": "07:30", "permanent": true}'
 
 # Change a group's time - permanently, or just for its next occurrence
-curl -X POST http://localhost:5000/plan/groups/<id> -d '{"time": "07:15", "permanent": true}'
-curl -X POST http://localhost:5000/plan/groups/<id> -d '{"time": "09:00", "permanent": false}'
+curl -X POST http://localhost:5000/api/plan/groups/<id> -d '{"time": "07:15", "permanent": true}'
+curl -X POST http://localhost:5000/api/plan/groups/<id> -d '{"time": "09:00", "permanent": false}'
 
 # Delete a group (frees its days again)
-curl -X DELETE http://localhost:5000/plan/groups/<id>
+curl -X DELETE http://localhost:5000/api/plan/groups/<id>
 
 # Pause the whole plan (editing any group/day reactivates it)
-curl -X POST http://localhost:5000/plan/disable
+curl -X POST http://localhost:5000/api/plan/disable
 
 # Stop or snooze a ringing alarm
-curl -X POST http://localhost:5000/plan/stop
-curl -X POST http://localhost:5000/plan/snooze -d '{"minutes": 9}'
+curl -X POST http://localhost:5000/api/plan/stop
+curl -X POST http://localhost:5000/api/plan/snooze -d '{"minutes": 9}'
 
 # Modules: list, enable/disable, settings
-curl http://localhost:5000/modules
-curl -X POST http://localhost:5000/modules/light/enable
-curl http://localhost:5000/modules/light/settings/schema
-curl http://localhost:5000/modules/light/settings
-curl -X POST http://localhost:5000/modules/light/settings -d '{"brightness": 80}'
+curl http://localhost:5000/api/modules
+curl -X POST http://localhost:5000/api/modules/light/enable
+curl http://localhost:5000/api/modules/light/settings/schema
+curl http://localhost:5000/api/modules/light/settings
+curl -X POST http://localhost:5000/api/modules/light/settings -d '{"brightness": 80}'
 ```
 
-Browser UI (`/ui/...`, classic HTML forms, no JS): `/ui/` shows the sleep
+Browser UI (`/...`, classic HTML forms, no JS): `/` shows the sleep
 plan's groups and any still-free weekdays, each with a small form to set a
 new time (next-only or permanent) and a group delete button, a form to bundle
 free days into a new group, and global stop/snooze/deactivate controls;
-`/ui/modules/<name>/settings` renders that module's settings form generically
+`/modules/<name>/settings` renders that module's settings form generically
 from its schema (see "`webui` Widget Rendering" above). These are separate
-routes from the JSON API above even though they call the same
-`Scheduler`/`Module` methods under the hood - it keeps the REST API a pure
-JSON contract.
+routes from the JSON API above (which lives under `/api`) even though they
+call the same `Scheduler`/`Module` methods under the hood - it keeps the
+REST API a pure JSON contract.
 
 ## Testing
 

@@ -2,7 +2,7 @@
    (see webui.py:_resolve_widgets) - this macro only maps widget -> markup,
    it never looks at `field.type` directly. #}
 {% macro render_field(name, field, value, locked=false) %}
-  <label class="field">
+  <label class="field{% if field.widget in ("slider", "toggle", "dropdown") %} field-inline{% endif %}">
     <span>{{ field.label or name }}{% if locked %} <span class="locked-hint">🔒 durch Config gesperrt</span>{% endif %}</span>
     {% if field.widget == "slider" %}
       <input type="range" id="field-{{ name }}" name="{{ name }}" value="{{ value }}" {% if locked %}disabled{% endif %}
@@ -47,7 +47,7 @@
 {% macro restart_hint(module, next) %}
   {% if module.needs_restart %}
     <span class="restart-hint">Neustart nötig</span>
-    <form method="post" action="/ui/modules/{{ module.name }}/restart" class="inline">
+    <form method="post" action="/modules/{{ module.name }}/restart" class="inline">
       <input type="hidden" name="next" value="{{ next }}">
       <button type="submit">Neu starten</button>
     </form>

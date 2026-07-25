@@ -7,6 +7,7 @@ persistence:
 modules:
 
   webui:
+    hostname: ''
     enabled: true
     class: 'alarmclock.modules.webui.webui:WebUIModule'
 
@@ -25,7 +26,6 @@ modules:
     # override_enabled: true
     # overrides:
     pin: 22
-
 
   sound:
     enabled: false

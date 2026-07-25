@@ -6,9 +6,9 @@
 
 <div class="card">
 <h1>{{ module.display_name or module.name }} settings
-  {{ widgets.restart_hint(module, "/ui/modules/" ~ module.name ~ "/settings") }}
+  {{ widgets.restart_hint(module, "/modules/" ~ module.name ~ "/settings") }}
 </h1>
-<form method="post" action="/ui/modules/{{ module.name }}/settings">
+<form method="post" action="/modules/{{ module.name }}/settings">
   {% for key, field in schema.items() %}
     {{ widgets.render_field(key, field, values.get(key), key in locked_fields) }}
   {% else %}
@@ -18,7 +18,7 @@
 </form>
 </div>
 
-<p><a href="/ui/">&larr; back</a></p>
+<p><a href="/">&larr; back</a></p>
 {% endblock %}
 
 {% block scripts %}

@@ -178,6 +178,35 @@ form.inline {
   font-weight: 600;
 }
 
+/* Slider, toggle and dropdown fields read better horizontally, control
+   first: a column of several of them otherwise makes it ambiguous which
+   label belongs to which handle (e.g. led's six per-flag reaction
+   dropdowns). `row-reverse` flips the visual order without touching the
+   DOM order (span still comes first, so no markup change needed
+   elsewhere). The toggle switch and select both size to their own
+   content/fixed width, so only the range input needs `flex: 1` to fill
+   the rest of the row. */
+.field-inline {
+  display: flex;
+  flex-direction: row-reverse;
+  /* row-reverse puts the main-start edge on the right, so flex-end (not
+     the flex-start default) is what packs the control+label pair against
+     the left edge instead of the right. */
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.field-inline span {
+  margin-bottom: 0;
+  flex: none;
+}
+
+.field-inline input[type="range"] {
+  flex: 1;
+  width: auto;
+}
+
 .error {
   color: var(--danger);
   background: var(--danger-bg);

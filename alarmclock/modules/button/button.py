@@ -19,10 +19,12 @@ the shared `flags.BUTTON_FLAGS` ("press", "release", "click",
 "double_click", "multi_click", "long_press") and re-emitted as a generic
 `button.flag` {"name", "pin", "flag"} event. This is what lets an output
 module like led react to a *selection* of button gestures without knowing
-button-specific event names - see the `flags` setting below, and led's
-`reacts_to` setting, which is populated from the same vocabulary. Which
-flags actually get sent is itself configurable via the `flags` setting
-(default: all of them) - this is the "linking" the settings UI exposes.
+button-specific event names - see the per-flag `send_<flag>` toggle settings
+below, and led's `reaction_<flag>` settings, which are populated from the
+same vocabulary. Which flags actually get sent is itself configurable via
+its own `send_<flag>` toggle (default: off, same as led's per-flag reactions
+default to "ignore" - a fresh install wires nothing until the user opts
+each flag in) - this is the "linking" the settings UI exposes.
 
 Real hardware access lives behind a driver picked via the "driver" setting -
 "mock" (default, safe everywhere) or "real" (actual Raspberry Pi GPIO).
@@ -39,6 +41,10 @@ from alarmclock.modules.flags import BUTTON_FLAGS
 
 DEFAULT_LONG_PRESS_SECONDS = 1.0
 DEFAULT_COMBO_WINDOW_SECONDS = 0.4
+
+
+def _flag_setting(flag: str) -> str:
+    return f"send_{flag}"
 
 
 class ButtonModule(InputModule):
@@ -78,7 +84,7 @@ class ButtonModule(InputModule):
     async def _emit_flag(self, flag: str) -> None:
         """Re-emit a gesture as the generic `button.flag` event, but only if
         it's one of the flags this button is configured to send."""
-        if flag in self.settings["flags"]:
+        if self.settings.get(_flag_setting(flag), False):
             await self.bus.emit("button.flag", {"name": self.name, "pin": self.pin, "flag": flag})
 
     async def _register_release(self) -> None:
@@ -145,10 +151,10 @@ class ButtonModule(InputModule):
             "label": "Combo window (s)",
             "default": DEFAULT_COMBO_WINDOW_SECONDS,
         }
-        schema["flags"] = {
-            "type": "multiselect",
-            "options": BUTTON_FLAGS,
-            "label": "Flags to send",
-            "default": list(BUTTON_FLAGS),
-        }
+        for flag in BUTTON_FLAGS:
+            schema[_flag_setting(flag)] = {
+                "type": "bool",
+                "label": f"Send: {flag}",
+                "default": False,
+            }
         return schema

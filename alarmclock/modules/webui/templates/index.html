@@ -39,18 +39,18 @@
     </div>
   </div>
   {% if is_skipped %}
-    <form method="post" action="/ui/plan/override/clear">
+    <form method="post" action="/plan/override/clear">
       <button type="submit" class="switch" aria-label="Wecker aktiv"></button>
     </form>
   {% else %}
-    <form method="post" action="/ui/plan/master/skip">
+    <form method="post" action="/plan/master/skip">
       <button type="submit" class="switch is-on" aria-label="Wecker aktiv"></button>
     </form>
   {% endif %}
 </div>
 
 {% if override_time is not none %}
-  <form method="post" action="/ui/plan/override/clear" class="next-field-set">
+  <form method="post" action="/plan/override/clear" class="next-field-set">
     <button type="submit" class="next-field-set-btn">
       <span class="next-field-set-text">{{ override_time.strftime('%H:%M') }} Uhr</span>
     </button>
@@ -58,7 +58,7 @@
 {% else %}
   <details class="next-field">
     <summary>Nächsten Wecker ändern</summary>
-    <form method="post" action="/ui/plan/override" class="next-field-edit">
+    <form method="post" action="/plan/override" class="next-field-edit">
       <input type="time" name="time" required autofocus>
       <button type="submit">Setzen</button>
     </form>
@@ -78,7 +78,7 @@
       {%- if group.is_editing %} editing{% endif %}
       {%- if any_editing and not group.is_editing %} dimmed{% endif %}">
 
-      <form method="post" action="/ui/plan/groups/{{ group.id }}/toggle">
+      <form method="post" action="/plan/groups/{{ group.id }}/toggle">
         <button type="submit" class="switch switch-sm{% if group.enabled %} is-on{% endif %}"
           {% if group.reenable_blocked %}
             disabled
@@ -91,7 +91,7 @@
       </form>
 
       {% if group.is_editing %}
-        <form method="post" action="/ui/plan/groups/{{ group.id }}/update" class="row-edit-form">
+        <form method="post" action="/plan/groups/{{ group.id }}/update" class="row-edit-form">
           <input type="time" name="time" value="{{ group.time.strftime('%H:%M') }}"
             required autofocus class="time-edit-input">
           <div class="days">
@@ -99,12 +99,12 @@
           </div>
           <div class="row-actions">
             <button type="submit" class="row-action confirm" aria-label="Speichern">&#10003;</button>
-            <a href="/ui/" class="row-action" aria-label="Abbrechen">&#10005;</a>
+            <a href="/" class="row-action" aria-label="Abbrechen">&#10005;</a>
           </div>
         </form>
       {% else %}
         {% if is_affected %}
-          <form method="post" action="/ui/plan/override/clear" class="row-main-form">
+          <form method="post" action="/plan/override/clear" class="row-main-form">
             <button type="submit" class="row-main">
               <span class="time-display">
                 <span class="was">{{ group.time.strftime('%H:%M') }}</span>
@@ -114,19 +114,19 @@
             </button>
           </form>
         {% else %}
-          <a href="/ui/?edit={{ group.id }}" class="row-main">
+          <a href="/?edit={{ group.id }}" class="row-main">
             <span class="time-display">{{ group.time.strftime('%H:%M') }}</span>
             <span class="days">{{ day_circles_static(group) }}</span>
           </a>
         {% endif %}
 
         {% if group.is_confirming_delete %}
-          <form method="post" action="/ui/plan/groups/{{ group.id }}/delete" class="row-actions">
+          <form method="post" action="/plan/groups/{{ group.id }}/delete" class="row-actions">
             <button type="submit" class="row-action delete confirming"
               aria-label="Wirklich löschen? Nochmal tippen">&#10005;</button>
           </form>
         {% else %}
-          <a href="/ui/?confirm_delete={{ group.id }}" class="row-actions">
+          <a href="/?confirm_delete={{ group.id }}" class="row-actions">
             <span class="row-action delete" aria-label="Plan löschen">&#10005;</span>
           </a>
         {% endif %}
@@ -134,7 +134,7 @@
     </div>
   {% endfor %}
 
-  <form method="post" action="/ui/plan/groups" class="plan-row ghost{% if any_editing %} dimmed{% endif %}">
+  <form method="post" action="/plan/groups" class="plan-row ghost{% if any_editing %} dimmed{% endif %}">
     <span class="switch switch-sm" aria-hidden="true"></span>
     <input type="time" name="time" required class="time-edit-input" placeholder="--:--">
     <div class="days">
@@ -162,19 +162,19 @@
       <td>
         <div class="module-controls">
           {% if module.enabled %}
-            <form method="post" action="/ui/modules/{{ module.name }}/disable" class="inline">
+            <form method="post" action="/modules/{{ module.name }}/disable" class="inline">
               <button type="submit" class="switch switch-sm is-on" aria-label="Modul aktiv"></button>
             </form>
           {% else %}
-            <form method="post" action="/ui/modules/{{ module.name }}/enable" class="inline">
+            <form method="post" action="/modules/{{ module.name }}/enable" class="inline">
               <button type="submit" class="switch switch-sm" aria-label="Modul aktiv"></button>
             </form>
           {% endif %}
           {% if module.has_settings %}
-            <a href="/ui/modules/{{ module.name }}/settings" class="row-action settings"
+            <a href="/modules/{{ module.name }}/settings" class="row-action settings"
               aria-label="Einstellungen" title="Einstellungen">&#9881;</a>
           {% endif %}
-          {{ widgets.restart_hint(module, "/ui/") }}
+          {{ widgets.restart_hint(module, "/") }}
         </div>
       </td>
     </tr>

@@ -62,7 +62,7 @@ def make_client() -> tuple[TestClient, Scheduler, WebUIModule, DummyModule]:
 
 def test_get_plan_empty():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.get("/plan")
+    response = client.get("/api/plan")
     assert response.status_code == 200
     assert response.json() == {
         "groups": [],
@@ -74,36 +74,36 @@ def test_get_plan_empty():
 
 def test_create_group_and_list_it():
     client, scheduler, _webui, _dummy = make_client()
-    response = client.post("/plan/groups", json={"days": [0, 1], "time": "06:30"})
+    response = client.post("/api/plan/groups", json={"days": [0, 1], "time": "06:30"})
     assert response.status_code == 200
     body = response.json()
     assert body["days"] == [0, 1]
     assert body["time"] == "06:30:00"
 
-    listed = client.get("/plan").json()
+    listed = client.get("/api/plan").json()
     assert listed["groups"] == [body]
 
 
 def test_create_group_rejects_already_assigned_day():
     client, _scheduler, _webui, _dummy = make_client()
-    client.post("/plan/groups", json={"days": [0], "time": "06:30"})
-    response = client.post("/plan/groups", json={"days": [0, 1], "time": "07:00"})
+    client.post("/api/plan/groups", json={"days": [0], "time": "06:30"})
+    response = client.post("/api/plan/groups", json={"days": [0, 1], "time": "07:00"})
     assert response.status_code == 400
 
 
 def test_update_group_permanent_and_next_only():
     client, scheduler, _webui, _dummy = make_client()
-    group = client.post("/plan/groups", json={"days": [0], "time": "06:30"}).json()
+    group = client.post("/api/plan/groups", json={"days": [0], "time": "06:30"}).json()
 
     response = client.post(
-        f"/plan/groups/{group['id']}", json={"time": "07:00", "permanent": True}
+        f"/api/plan/groups/{group['id']}", json={"time": "07:00", "permanent": True}
     )
     assert response.status_code == 200
     assert response.json()["groups"][0]["time"] == "07:00:00"
     assert response.json()["overrides"] == {}
 
     response = client.post(
-        f"/plan/groups/{group['id']}", json={"time": "09:00", "permanent": False}
+        f"/api/plan/groups/{group['id']}", json={"time": "09:00", "permanent": False}
     )
     assert response.status_code == 200
     assert response.json()["groups"][0]["time"] == "07:00:00"
@@ -112,28 +112,28 @@ def test_update_group_permanent_and_next_only():
 
 def test_update_unknown_group_returns_400():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.post("/plan/groups/does-not-exist", json={"time": "07:00"})
+    response = client.post("/api/plan/groups/does-not-exist", json={"time": "07:00"})
     assert response.status_code == 400
 
 
 def test_delete_group_frees_its_days():
     client, scheduler, _webui, _dummy = make_client()
-    group = client.post("/plan/groups", json={"days": [0], "time": "06:30"}).json()
+    group = client.post("/api/plan/groups", json={"days": [0], "time": "06:30"}).json()
 
-    response = client.delete(f"/plan/groups/{group['id']}")
+    response = client.delete(f"/api/plan/groups/{group['id']}")
     assert response.status_code == 200
-    assert client.get("/plan").json()["groups"] == []
+    assert client.get("/api/plan").json()["groups"] == []
 
 
 def test_delete_unknown_group_returns_404():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.delete("/plan/groups/does-not-exist")
+    response = client.delete("/api/plan/groups/does-not-exist")
     assert response.status_code == 404
 
 
 def test_set_day_permanent_creates_solo_group():
     client, scheduler, _webui, _dummy = make_client()
-    response = client.post("/plan/days/monday", json={"time": "07:00", "permanent": True})
+    response = client.post("/api/plan/days/monday", json={"time": "07:00", "permanent": True})
     assert response.status_code == 200
     groups = response.json()["groups"]
     assert len(groups) == 1
@@ -143,7 +143,7 @@ def test_set_day_permanent_creates_solo_group():
 
 def test_set_day_next_only_does_not_create_a_group():
     client, scheduler, _webui, _dummy = make_client()
-    response = client.post("/plan/days/monday", json={"time": "08:00", "permanent": False})
+    response = client.post("/api/plan/days/monday", json={"time": "08:00", "permanent": False})
     assert response.status_code == 200
     assert response.json()["groups"] == []
     assert len(response.json()["overrides"]) == 1
@@ -151,40 +151,40 @@ def test_set_day_next_only_does_not_create_a_group():
 
 def test_set_day_already_assigned_returns_409():
     client, _scheduler, _webui, _dummy = make_client()
-    client.post("/plan/days/monday", json={"time": "07:00", "permanent": True})
-    response = client.post("/plan/days/monday", json={"time": "08:00", "permanent": False})
+    client.post("/api/plan/days/monday", json={"time": "07:00", "permanent": True})
+    response = client.post("/api/plan/days/monday", json={"time": "08:00", "permanent": False})
     assert response.status_code == 409
 
 
 def test_set_day_unknown_weekday_returns_404():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.post("/plan/days/someday", json={"time": "07:00"})
+    response = client.post("/api/plan/days/someday", json={"time": "07:00"})
     assert response.status_code == 404
 
 
 def test_disable_plan():
     client, scheduler, _webui, _dummy = make_client()
-    response = client.post("/plan/disable")
+    response = client.post("/api/plan/disable")
     assert response.status_code == 200
     assert scheduler.get_plan().enabled is False
 
 
 def test_stop_plan():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.post("/plan/stop")
+    response = client.post("/api/plan/stop")
     assert response.status_code == 200
 
 
 def test_snooze_plan():
     client, scheduler, _webui, _dummy = make_client()
-    response = client.post("/plan/snooze", json={"minutes": 5})
+    response = client.post("/api/plan/snooze", json={"minutes": 5})
     assert response.status_code == 200
     assert response.json()["snooze_until"] == scheduler.get_plan().snooze_until.isoformat()
 
 
 def test_list_modules_includes_webui_and_dummy():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.get("/modules")
+    response = client.get("/api/modules")
     assert response.status_code == 200
     names = {module["name"] for module in response.json()}
     assert names == {"webui", "dummy"}
@@ -194,10 +194,10 @@ def test_enable_and_disable_module():
     client, _scheduler, _webui, dummy = make_client()
     assert dummy.enabled is False
 
-    assert client.post("/modules/dummy/enable").status_code == 200
+    assert client.post("/api/modules/dummy/enable").status_code == 200
     assert dummy.enabled is True
 
-    assert client.post("/modules/dummy/disable").status_code == 200
+    assert client.post("/api/modules/dummy/disable").status_code == 200
     assert dummy.enabled is False
 
 
@@ -205,7 +205,7 @@ def test_restart_module_endpoint_disables_then_enables():
     client, _scheduler, _webui, dummy = make_client()
     dummy.needs_restart = True
 
-    response = client.post("/modules/dummy/restart")
+    response = client.post("/api/modules/dummy/restart")
 
     assert response.status_code == 200
     assert dummy.enabled is True
@@ -215,7 +215,7 @@ def test_list_modules_exposes_needs_restart():
     client, _scheduler, _webui, dummy = make_client()
     dummy.needs_restart = True
 
-    response = client.get("/modules")
+    response = client.get("/api/modules")
 
     by_name = {module["name"]: module for module in response.json()}
     assert by_name["dummy"]["needs_restart"] is True
@@ -225,7 +225,7 @@ def test_list_modules_exposes_needs_restart():
 def test_update_settings_flags_needs_restart_only_for_flagged_field_change():
     client, _scheduler, _webui, dummy = make_client()
 
-    response = client.post("/modules/dummy/settings", json={"brightness": 90})
+    response = client.post("/api/modules/dummy/settings", json={"brightness": 90})
 
     assert response.status_code == 200
     assert dummy.needs_restart is True
@@ -233,28 +233,28 @@ def test_update_settings_flags_needs_restart_only_for_flagged_field_change():
 
 def test_unknown_module_returns_404():
     client, _scheduler, _webui, _dummy = make_client()
-    assert client.post("/modules/nonexistent/enable").status_code == 404
-    assert client.get("/modules/nonexistent/settings").status_code == 404
-    assert client.get("/modules/nonexistent/settings/schema").status_code == 404
+    assert client.post("/api/modules/nonexistent/enable").status_code == 404
+    assert client.get("/api/modules/nonexistent/settings").status_code == 404
+    assert client.get("/api/modules/nonexistent/settings/schema").status_code == 404
 
 
 def test_get_settings_schema_for_module():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.get("/modules/dummy/settings/schema")
+    response = client.get("/api/modules/dummy/settings/schema")
     assert response.status_code == 200
     assert response.json() == {**ACTIVE_SCHEMA_FIELD, **DUMMY_SCHEMA}
 
 
 def test_get_settings_for_module():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.get("/modules/dummy/settings")
+    response = client.get("/api/modules/dummy/settings")
     assert response.status_code == 200
     assert response.json() == {"active": True, "brightness": 50}
 
 
 def test_update_settings_for_module_validates_and_persists():
     client, _scheduler, _webui, dummy = make_client()
-    response = client.post("/modules/dummy/settings", json={"brightness": 75})
+    response = client.post("/api/modules/dummy/settings", json={"brightness": 75})
     assert response.status_code == 200
     assert response.json() == {"active": True, "brightness": 75}
     assert dummy.settings == {"active": True, "brightness": 75}
@@ -262,7 +262,7 @@ def test_update_settings_for_module_validates_and_persists():
 
 def test_update_settings_rejects_invalid_value():
     client, _scheduler, _webui, dummy = make_client()
-    response = client.post("/modules/dummy/settings", json={"brightness": 999})
+    response = client.post("/api/modules/dummy/settings", json={"brightness": 999})
     assert response.status_code == 400
     assert dummy.settings == {"active": True, "brightness": 50}
 
@@ -322,7 +322,7 @@ def test_webui_update_settings_flags_needs_restart_for_host_and_port_only():
 
 def test_no_password_set_allows_requests_without_credentials():
     client, _scheduler, _webui, _dummy = make_client()
-    response = client.get("/plan")
+    response = client.get("/api/plan")
     assert response.status_code == 200
 
 
@@ -334,7 +334,7 @@ def test_password_set_rejects_api_requests_without_login():
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
-    response = client.get("/plan")
+    response = client.get("/api/plan")
     assert response.status_code == 401
 
 
@@ -346,9 +346,9 @@ def test_password_set_redirects_ui_requests_without_login_to_login_page():
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app, follow_redirects=False)
 
-    response = client.get("/ui/")
+    response = client.get("/")
     assert response.status_code == 303
-    assert response.headers["location"] == "/login?next=/ui/"
+    assert response.headers["location"] == "/login?next=/"
 
 
 def test_login_page_is_reachable_without_a_session():
@@ -373,8 +373,8 @@ def test_login_with_wrong_password_does_not_grant_access():
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
-    client.post("/login", data={"password": "wrong", "next": "/ui/"})
-    response = client.get("/plan")
+    client.post("/login", data={"password": "wrong", "next": "/"})
+    response = client.get("/api/plan")
     assert response.status_code == 401
 
 
@@ -387,12 +387,12 @@ def test_login_with_correct_password_grants_session_access():
     client = TestClient(webui.app)
 
     login = client.post(
-        "/login", data={"password": "secret", "next": "/ui/"}, follow_redirects=False
+        "/login", data={"password": "secret", "next": "/"}, follow_redirects=False
     )
     assert login.status_code == 303
-    assert login.headers["location"] == "/ui/"
+    assert login.headers["location"] == "/"
 
-    response = client.get("/plan")
+    response = client.get("/api/plan")
     assert response.status_code == 200
 
 
@@ -404,7 +404,7 @@ def test_login_redirects_back_to_the_originally_requested_page():
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app, follow_redirects=False)
 
-    denied = client.get("/ui/modules/webui/settings")
+    denied = client.get("/modules/webui/settings")
     assert denied.status_code == 303
     next_target = denied.headers["location"].removeprefix("/login?next=")
 
@@ -420,12 +420,12 @@ def test_changing_password_invalidates_existing_sessions():
     webui.attach_context(scheduler, [webui])
     client = TestClient(webui.app)
 
-    client.post("/login", data={"password": "secret", "next": "/ui/"})
-    assert client.get("/plan").status_code == 200
+    client.post("/login", data={"password": "secret", "next": "/"})
+    assert client.get("/api/plan").status_code == 200
 
     asyncio.run(webui.update_settings({"password": "new-secret"}))
 
-    assert client.get("/plan").status_code == 401
+    assert client.get("/api/plan").status_code == 401
 
 
 def test_webui_enable_raises_and_stays_disabled_when_port_is_taken():

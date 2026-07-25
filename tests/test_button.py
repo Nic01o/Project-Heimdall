@@ -53,11 +53,13 @@ def test_settings_schema_has_pattern_thresholds():
     assert schema["combo_window_seconds"]["type"] == "float"
 
 
-def test_settings_schema_has_flags_multiselect():
+def test_settings_schema_has_per_flag_toggles():
     module = make_module()
     schema = module.get_settings_schema()
-    assert schema["flags"]["type"] == "multiselect"
-    assert schema["flags"]["options"] == BUTTON_FLAGS
+    for flag in BUTTON_FLAGS:
+        field = schema[f"send_{flag}"]
+        assert field["type"] == "bool"
+        assert field["default"] is False
 
 
 def test_pin_property_reads_from_settings():
@@ -276,6 +278,8 @@ def test_press_and_release_emit_press_and_release_flags():
     async def scenario():
         bus = EventBus()
         module = ButtonModule("button", bus)
+        module.settings["send_press"] = True
+        module.settings["send_release"] = True
         module.poll_interval = 0.01
         await module.init()
 
@@ -304,6 +308,8 @@ def test_click_double_click_and_multi_click_emit_matching_flags():
         bus = EventBus()
         module = ButtonModule("button", bus)
         module.settings["combo_window_seconds"] = 0.03
+        for flag in BUTTON_FLAGS:
+            module.settings[f"send_{flag}"] = True
         module.poll_interval = 0.01
         await module.init()
 
@@ -335,6 +341,8 @@ def test_long_press_emits_long_press_flag():
         module = ButtonModule("button", bus)
         module.settings["combo_window_seconds"] = 0.03
         module.settings["long_press_seconds"] = 0.05
+        module.settings["send_long_press"] = True
+        module.settings["send_click"] = True
         module.poll_interval = 0.01
         await module.init()
 
@@ -360,7 +368,8 @@ def test_flags_setting_filters_which_flags_are_sent():
     async def scenario():
         bus = EventBus()
         module = ButtonModule("button", bus)
-        module.settings["flags"] = ["long_press"]
+        for flag in BUTTON_FLAGS:
+            module.settings[f"send_{flag}"] = flag == "long_press"
         module.poll_interval = 0.01
         await module.init()
 

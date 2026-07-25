@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import APIRouter, FastAPI, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -73,7 +73,7 @@ def _resolve_widgets(schema: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
 
 def _editable_schema(schema: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """`active` is controlled via the dedicated enable/disable buttons
-    (module.set_active(), see /ui/modules/{name}/enable|disable) - excluded
+    (module.set_active(), see /modules/{name}/enable|disable) - excluded
     here so saving the generic settings form can't silently flip it off via
     the "unchecked checkbox" trap (`_form_to_settings` reads a bool field
     that's missing from the submitted form as False, but a hidden field is
@@ -117,7 +117,7 @@ def _safe_next(candidate: str) -> str:
     into an open redirect."""
     if candidate.startswith("/") and not candidate.startswith("//"):
         return candidate
-    return "/ui/"
+    return "/"
 
 
 class GroupCreate(BaseModel):
@@ -332,10 +332,10 @@ class WebUIModule(Module):
     def _register_auth(self) -> None:
         """Gate every request behind a shared password, checked via a login
         page that sets a session cookie on success. Applies to the JSON API
-        and the /ui pages alike since both are served from the same app -
-        there's no route that should be reachable without it once a password
-        is set. No password configured (the default) means no login is
-        required, so existing installs aren't locked out."""
+        (/api) and the HTML pages alike since both are served from the same
+        app - there's no route that should be reachable without it once a
+        password is set. No password configured (the default) means no login
+        is required, so existing installs aren't locked out."""
 
         @self.app.middleware("http")
         async def require_auth(request: Request, call_next):
@@ -351,9 +351,9 @@ class WebUIModule(Module):
             if token is not None and token in self._sessions:
                 return await call_next(request)
 
-            if path.startswith("/ui") or path == "/":
-                return RedirectResponse(f"/login?next={path}", status_code=303)
-            return JSONResponse(status_code=401, content={"detail": "not authenticated"})
+            if path.startswith("/api"):
+                return JSONResponse(status_code=401, content={"detail": "not authenticated"})
+            return RedirectResponse(f"/login?next={path}", status_code=303)
 
     def _register_login_routes(self) -> None:
         """The login form itself - a single password field, no separate
@@ -362,14 +362,14 @@ class WebUIModule(Module):
         templates = self._templates
 
         @app.get("/login", include_in_schema=False)
-        async def login_form(request: Request, next: str = "/ui/", error: str | None = None):
+        async def login_form(request: Request, next: str = "/", error: str | None = None):
             return templates.TemplateResponse(
                 request, "login.html", {"next": _safe_next(next), "error": error}
             )
 
         @app.post("/login", include_in_schema=False)
         async def login_submit(
-            password: str = Form(""), next: str = Form("/ui/")
+            password: str = Form(""), next: str = Form("/")
         ) -> RedirectResponse:
             safe_next = _safe_next(next)
             configured = self.settings.get("password", "")
@@ -384,7 +384,7 @@ class WebUIModule(Module):
             return response
 
     def _register_routes(self) -> None:
-        app = self.app
+        app = APIRouter(prefix="/api")
 
         @app.get("/plan")
         async def get_plan() -> dict[str, Any]:
@@ -500,19 +500,18 @@ class WebUIModule(Module):
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return await module.get_settings()
 
+        self.app.include_router(app)
+
     def _register_ui_routes(self) -> None:
         """Server-rendered HTML control panel: classic forms, no JS. Separate
-        routes from the JSON API above (prefixed /ui) even though they end up
-        calling the same Scheduler/Module methods - keeps the REST API a pure
-        JSON contract and the HTML pages a pure Post/Redirect/Get flow."""
+        routes from the JSON API above (mounted under /api) even though they
+        end up calling the same Scheduler/Module methods - keeps the REST API
+        a pure JSON contract and the HTML pages a pure Post/Redirect/Get
+        flow."""
         app = self.app
         templates = self._templates
 
         @app.get("/", include_in_schema=False)
-        async def root_redirect() -> RedirectResponse:
-            return RedirectResponse("/ui/", status_code=303)
-
-        @app.get("/ui/", include_in_schema=False)
         async def ui_index(
             request: Request,
             error: str | None = None,
@@ -622,7 +621,7 @@ class WebUIModule(Module):
                 },
             )
 
-        @app.post("/ui/plan/groups", include_in_schema=False)
+        @app.post("/plan/groups", include_in_schema=False)
         async def ui_create_group(
             time: str = Form(""), days: list[str] = Form([])
         ) -> RedirectResponse:
@@ -631,89 +630,89 @@ class WebUIModule(Module):
                 # disabled/unchecked) - the confirm button is already inert
                 # for mouse clicks via CSS; on the server side this is just
                 # a no-op, not an error worth surfacing.
-                return RedirectResponse("/ui/", status_code=303)
+                return RedirectResponse("/", status_code=303)
             scheduler = self._get_scheduler()
             try:
                 parsed_days = frozenset(Weekday(int(day)) for day in days)
                 parsed_time = datetime.time.fromisoformat(time)
                 scheduler.create_group(parsed_days, parsed_time)
             except ValueError as exc:
-                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
-            return RedirectResponse("/ui/", status_code=303)
+                return RedirectResponse(f"/?error={exc}", status_code=303)
+            return RedirectResponse("/", status_code=303)
 
-        @app.post("/ui/plan/groups/{group_id}/update", include_in_schema=False)
+        @app.post("/plan/groups/{group_id}/update", include_in_schema=False)
         async def ui_update_group(
             group_id: str, time: str = Form(""), days: list[str] = Form([])
         ) -> RedirectResponse:
             if not days:
-                return RedirectResponse(f"/ui/?edit={group_id}", status_code=303)
+                return RedirectResponse(f"/?edit={group_id}", status_code=303)
             scheduler = self._get_scheduler()
             try:
                 parsed_days = frozenset(Weekday(int(day)) for day in days)
                 parsed_time = datetime.time.fromisoformat(time)
                 scheduler.update_group(group_id, parsed_days, parsed_time)
             except ValueError as exc:
-                return RedirectResponse(f"/ui/?error={exc}&edit={group_id}", status_code=303)
-            return RedirectResponse("/ui/", status_code=303)
+                return RedirectResponse(f"/?error={exc}&edit={group_id}", status_code=303)
+            return RedirectResponse("/", status_code=303)
 
-        @app.post("/ui/plan/groups/{group_id}/toggle", include_in_schema=False)
+        @app.post("/plan/groups/{group_id}/toggle", include_in_schema=False)
         async def ui_toggle_group(group_id: str) -> RedirectResponse:
             try:
                 self._get_scheduler().toggle_group_enabled(group_id)
             except ValueError as exc:
-                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
-            return RedirectResponse("/ui/", status_code=303)
+                return RedirectResponse(f"/?error={exc}", status_code=303)
+            return RedirectResponse("/", status_code=303)
 
-        @app.post("/ui/plan/groups/{group_id}/delete", include_in_schema=False)
+        @app.post("/plan/groups/{group_id}/delete", include_in_schema=False)
         async def ui_delete_group(group_id: str) -> RedirectResponse:
             try:
                 self._get_scheduler().delete_group(group_id)
             except ValueError as exc:
-                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
-            return RedirectResponse("/ui/", status_code=303)
+                return RedirectResponse(f"/?error={exc}", status_code=303)
+            return RedirectResponse("/", status_code=303)
 
-        @app.post("/ui/plan/master/skip", include_in_schema=False)
+        @app.post("/plan/master/skip", include_in_schema=False)
         async def ui_skip_next_alarm() -> RedirectResponse:
             self._get_scheduler().skip_next_alarm()
-            return RedirectResponse("/ui/", status_code=303)
+            return RedirectResponse("/", status_code=303)
 
-        @app.post("/ui/plan/override", include_in_schema=False)
+        @app.post("/plan/override", include_in_schema=False)
         async def ui_set_override(time: str = Form("")) -> RedirectResponse:
             scheduler = self._get_scheduler()
             try:
                 parsed_time = datetime.time.fromisoformat(time)
             except ValueError as exc:
-                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
+                return RedirectResponse(f"/?error={exc}", status_code=303)
             scheduler.override_next_alarm_time(parsed_time)
-            return RedirectResponse("/ui/", status_code=303)
+            return RedirectResponse("/", status_code=303)
 
-        @app.post("/ui/plan/override/clear", include_in_schema=False)
+        @app.post("/plan/override/clear", include_in_schema=False)
         async def ui_clear_override() -> RedirectResponse:
             self._get_scheduler().clear_alarm_override()
-            return RedirectResponse("/ui/", status_code=303)
+            return RedirectResponse("/", status_code=303)
 
-        @app.post("/ui/modules/{name}/enable", include_in_schema=False)
+        @app.post("/modules/{name}/enable", include_in_schema=False)
         async def ui_enable_module(name: str) -> RedirectResponse:
             try:
                 await self._get_module(name).set_active(True)
             except SettingsValidationError as exc:
-                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
-            return RedirectResponse("/ui/", status_code=303)
+                return RedirectResponse(f"/?error={exc}", status_code=303)
+            return RedirectResponse("/", status_code=303)
 
-        @app.post("/ui/modules/{name}/disable", include_in_schema=False)
+        @app.post("/modules/{name}/disable", include_in_schema=False)
         async def ui_disable_module(name: str) -> RedirectResponse:
             try:
                 await self._get_module(name).set_active(False)
             except SettingsValidationError as exc:
-                return RedirectResponse(f"/ui/?error={exc}", status_code=303)
-            return RedirectResponse("/ui/", status_code=303)
+                return RedirectResponse(f"/?error={exc}", status_code=303)
+            return RedirectResponse("/", status_code=303)
 
-        @app.post("/ui/modules/{name}/restart", include_in_schema=False)
-        async def ui_restart_module(name: str, next: str = Form("/ui/")) -> RedirectResponse:
+        @app.post("/modules/{name}/restart", include_in_schema=False)
+        async def ui_restart_module(name: str, next: str = Form("/")) -> RedirectResponse:
             await self._get_module(name).restart()
             return RedirectResponse(_safe_next(next), status_code=303)
 
-        @app.get("/ui/modules/{name}/settings", include_in_schema=False)
+        @app.get("/modules/{name}/settings", include_in_schema=False)
         async def ui_module_settings(request: Request, name: str, error: str | None = None):
             module = self._get_module(name)
             schema = _editable_schema(module.get_settings_schema())
@@ -730,7 +729,7 @@ class WebUIModule(Module):
                 },
             )
 
-        @app.post("/ui/modules/{name}/settings", include_in_schema=False)
+        @app.post("/modules/{name}/settings", include_in_schema=False)
         async def ui_update_module_settings(name: str, request: Request) -> RedirectResponse:
             module = self._get_module(name)
             schema = _editable_schema(module.get_settings_schema())
@@ -740,6 +739,6 @@ class WebUIModule(Module):
                 await module.update_settings(values)
             except (SettingsValidationError, ValueError) as exc:
                 return RedirectResponse(
-                    f"/ui/modules/{name}/settings?error={exc}", status_code=303
+                    f"/modules/{name}/settings?error={exc}", status_code=303
                 )
-            return RedirectResponse(f"/ui/modules/{name}/settings", status_code=303)
+            return RedirectResponse(f"/modules/{name}/settings", status_code=303)
