@@ -1,0 +1,7 @@
+core:
+    scheduler:
+      timezone: 'Europe/Berlin'
+      snooze: 8 # min
+
+
+

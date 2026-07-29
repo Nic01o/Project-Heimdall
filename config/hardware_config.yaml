@@ -1,0 +1,14 @@
+
+modules:
+
+  webui:
+    name: 'webui'
+    enabled: true
+
+  button:
+    name: 'button top'
+    enabled: false
+
+  led:
+    name: 'led front'
+    enabled: false
