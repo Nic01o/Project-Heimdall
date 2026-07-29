@@ -44,3 +44,14 @@ def test_store_read_missing():
     """Test that Store handles a missing file safely by returning None for unknown keys."""
     store = Store("missing.yaml")
     assert store.get("nonexistent_key") is None
+
+def test_cleanup():
+    """not a test, but removing all files that might have been created."""
+    files = ["update_test.yaml", "new_test.yaml", "test.yaml"]
+    for file in files:
+        if Path(file).exists():
+            Path(file).unlink()
+
+    # check if files are still there
+    for file in files:
+        assert Path(file).exists() == False
