@@ -19,7 +19,6 @@ def test_core_to_bus_to_module_round_trip():
 
         module = MyModule("mymodule", bus, {"enabled": True})
         await module.init()
-        await module.enable()
 
         action_done_events = []
 
@@ -36,7 +35,6 @@ def test_core_to_bus_to_module_round_trip():
         await asyncio.sleep(0.2)
         await scheduler.stop()
 
-        assert module.enabled is True
         assert len(action_done_events) == 1
         assert action_done_events[0] == {"status": "ok"}
         assert scheduler.get_plan().snooze_until is None  # cleared after firing

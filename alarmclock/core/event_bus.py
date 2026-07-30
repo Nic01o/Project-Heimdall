@@ -33,7 +33,14 @@ class Transport(abc.ABC):
 
 
 class LocalTransport(Transport):
-    """In-process transport: handlers are called directly, no serialization."""
+    """
+    An in-memory implementation of the Transport interface.
+
+    This transport delivers events to all subscribed handlers within the same
+    process using a local dictionary mapping event names to lists of handler
+    functions. It supports asynchronous, concurrent execution of handlers
+    when an event is published.
+    """
 
     def __init__(self) -> None:
         self._handlers: dict[str, list[Handler]] = defaultdict(list)
@@ -48,12 +55,15 @@ class LocalTransport(Transport):
 
     async def publish(self, event: str, payload: dict[str, Any]) -> None:
         handlers = list(self._handlers.get(event, ()))
+
         if not handlers:
             return
+
         results = await asyncio.gather(
             *(handler(payload) for handler in handlers),
             return_exceptions=True,
         )
+
         for handler, result in zip(handlers, results):
             if isinstance(result, Exception):
                 logger.exception(
@@ -62,7 +72,7 @@ class LocalTransport(Transport):
 
 
 class EventBus:
-    """Public pub/sub API used by modules. Delivery is delegated to a Transport."""
+    """Public pub/sub API used by modules. Delivery is delegated to Transport."""
 
     def __init__(self, transport: Transport | None = None) -> None:
         self._transport = transport or LocalTransport()

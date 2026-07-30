@@ -1,13 +1,11 @@
 """Sleep plan data model."""
 
 from __future__ import annotations
-
 import dataclasses
 import datetime
 import enum
 import uuid
 from typing import Any
-
 
 class Weekday(enum.IntEnum):
     """Matches `datetime.date.weekday()`: Monday = 0 ... Sunday = 6."""
@@ -20,7 +18,7 @@ class Weekday(enum.IntEnum):
     SATURDAY = 5
     SUNDAY = 6
 
-
+# map correct
 WEEKDAYS = frozenset(
     {Weekday.MONDAY, Weekday.TUESDAY, Weekday.WEDNESDAY, Weekday.THURSDAY, Weekday.FRIDAY}
 )
@@ -73,6 +71,7 @@ class SleepPlan:
     overrides: dict[datetime.date, datetime.time | None] = dataclasses.field(
         default_factory=dict
     )
+
     enabled: bool = True
     snooze_until: datetime.datetime | None = None
 
