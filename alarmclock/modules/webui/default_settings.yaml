@@ -1,0 +1,16 @@
+plugin:
+    name: webui
+    settings:
+      enable_login: true
+      password: 'pass'
+
+      host: "0.0.0.0"
+      port: 5000
+
+      color_profile: ocean
+      custom_accent: "#000000"
+      custom_accent_strong: "#000000"
+
+
+
+
