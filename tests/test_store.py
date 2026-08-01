@@ -1,16 +1,18 @@
-"""Tests für alarmclock.core.persistence.Store."""
+"""Tests for alarmclock.core.settings.Store class."""
 
+import os
+import tempfile
 from pathlib import Path
 import pytest
 import yaml
 
-from alarmclock.core.persistence import Store
+from alarmclock.core.settings import _Store
 
 
 @pytest.fixture
 def store(tmp_path):
     """Create a Store backed by a temporary directory."""
-    return Store(tmp_path / "test.yaml")
+    return _Store(tmp_path / "test.yaml")
 
 
 @pytest.fixture
@@ -23,7 +25,7 @@ def store_with_data(tmp_path):
     }
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(test_data, f)
-    return Store(path)
+    return _Store(path)
 
 
 def test_store_init(store):
@@ -38,7 +40,7 @@ def test_store_read_existing_full_file(tmp_path):
     with open(test_file_path, "w", encoding="utf-8") as f:
         yaml.dump(test_data, f)
 
-    store = Store(test_file_path)
+    store = _Store(test_file_path)
     content = store.read()
     assert isinstance(content, dict)
     assert content["modules"]["button"]["enabled"] is True
@@ -46,35 +48,35 @@ def test_store_read_existing_full_file(tmp_path):
 
 
 def test_store_read_missing_file(tmp_path):
-    """Test dass read() bei fehlender Datei leeres dict zurueckgibt."""
-    store = Store(tmp_path / "never_created.yaml")
+    """Test that read() with missing file returns empty dict."""
+    store = _Store(tmp_path / "never_created.yaml")
     content = store.read()
     assert isinstance(content, dict)
     assert len(content) == 0
 
 
 def test_store_get_setting_nested(store_with_data):
-    """Test Store.get_setting() mit dot-path (z.B. 'modules.button.enabled')."""
+    """Test Store.get_setting() with dot-path (e.g., 'modules.button.enabled')."""
     assert store_with_data.get_setting("modules.button.enabled") is True
     assert store_with_data.get_setting("modules.button.name") == "Physical"
     assert store_with_data.get_setting("nonexistent.key") is None
 
 
 def test_store_get_with_default(tmp_path):
-    """Test Store.get(key, default) mit Default-Wert."""
+    """Test Store.get(key, default) with default value."""
     path = tmp_path / "get_default.yaml"
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump({"existing": "value"}, f)
 
-    store = Store(path)
+    store = _Store(path)
     assert store.get("nonexistent") is None
     assert store.get("also_missing", "custom_default") == "custom_default"
     assert store.get("existing") == "value"
 
 
 def test_store_set_with_nested_value(tmp_path):
-    """Test Store.set() ersetzt ein Setting im Baum."""
-    store = Store(tmp_path / "set_test.yaml")
+    """Test Store.set() replaces a setting in the tree."""
+    store = _Store(tmp_path / "set_test.yaml")
 
     new_setting = {"enabled": False, "name": "LED", "brightness": 80}
     store.set("modules.button", new_setting)
@@ -86,14 +88,27 @@ def test_store_set_with_nested_value(tmp_path):
     assert content["modules"]["button"]["name"] == "LED"
 
 
+def test_store_set_scalar_value(tmp_path):
+    """Test Store.set() with scalar value."""
+    store = _Store(tmp_path / "set_scalar_test.yaml")
+
+    # Set a simple scalar value
+    store.set("core.timezone", "Europe/Berlin")
+
+    with open(tmp_path / "set_scalar_test.yaml", "r", encoding="utf-8") as f:
+        content = yaml.safe_load(f)
+
+    assert content["core"]["timezone"] == "Europe/Berlin"
+
+
 def test_store_update_setting_nested(tmp_path):
-    """Test Store.update_setting() aktualisiert ein einzelnes Feld."""
+    """Test Store.update_setting() updates a single field."""
     path = tmp_path / "update_test.yaml"
     initial_data = {"alarm": {"wake_time": "07:30", "volume": 10}}
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(initial_data, f)
 
-    store = Store(path)
+    store = _Store(path)
     store.update_setting("alarm.volume", 50)
 
     with open(path, "r", encoding="utf-8") as f:
@@ -104,8 +119,8 @@ def test_store_update_setting_nested(tmp_path):
 
 
 def test_store_write_full_replacement(tmp_path):
-    """Test Store.write() ersetzt die komplette Datei."""
-    store = Store(tmp_path / "write_test.yaml")
+    """Test Store.write() replaces the complete file."""
+    store = _Store(tmp_path / "write_test.yaml")
     store.set("key", "old_value")
 
     new_content = {"completely": "new"}
@@ -118,8 +133,8 @@ def test_store_write_full_replacement(tmp_path):
 
 
 def test_store_write_with_dict(tmp_path):
-    """Test Store.write() mit Dict."""
-    store = Store(tmp_path / "write_dict_test.yaml")
+    """Test Store.write() with dict."""
+    store = _Store(tmp_path / "write_dict_test.yaml")
     new_data = {
         "modules": {
             "button": {"enabled": True},
@@ -135,8 +150,8 @@ def test_store_write_with_dict(tmp_path):
 
 
 def test_store_write_empty_file(tmp_path):
-    """Test Store.write() mit leeren dict."""
-    store = Store(tmp_path / "empty_test.yaml")
+    """Test Store.write() with empty dict."""
+    store = _Store(tmp_path / "empty_test.yaml")
     store.write({})
 
     with open(tmp_path / "empty_test.yaml", "r", encoding="utf-8") as f:
@@ -146,19 +161,19 @@ def test_store_write_empty_file(tmp_path):
 
 
 def test_store_write_list(tmp_path):
-    """Test Store.write() kann auch Lists speichern."""
+    """Test Store.write() can also save lists."""
     path = tmp_path / "list_test.yaml"
     new_data = [1, 2, {"nested": True}]
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(new_data, f)
 
-    store = Store(path)
+    store = _Store(path)
     content = store.read()
     assert isinstance(content, list)
 
 
 def test_store_remove_setting(tmp_path):
-    """Test Store.remove_setting() entfernt ein Setting aus der Datei."""
+    """Test Store.remove_setting() removes a setting from the file."""
     path = tmp_path / "remove_test.yaml"
     initial_data = {
         "modules": {
@@ -169,7 +184,7 @@ def test_store_remove_setting(tmp_path):
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(initial_data, f)
 
-    store = Store(path)
+    store = _Store(path)
     result = store.remove_setting("modules.button.enabled")
     assert result is True
 
@@ -180,14 +195,14 @@ def test_store_remove_setting(tmp_path):
 
 
 def test_store_remove_nonexistent(tmp_path):
-    """Test Store.remove_setting() mit nicht-existent Setting."""
-    store = Store(tmp_path / "remove_nonexistent.yaml")
+    """Test Store.remove_setting() with non-existent setting."""
+    store = _Store(tmp_path / "remove_nonexistent.yaml")
     result = store.remove_setting("nonexistent.key")
     assert result is False
 
 
 def test_store_merge_settings(tmp_path):
-    """Test Store.merge_settings() deep merge neue Einstellungen."""
+    """Test Store.merge_settings() deep merge new settings."""
     path = tmp_path / "merge_test.yaml"
     initial_data = {
         "modules": {
@@ -200,7 +215,7 @@ def test_store_merge_settings(tmp_path):
     with open(path, "w", encoding="utf-8") as f:
         yaml.dump(initial_data, f)
 
-    store = Store(path)
+    store = _Store(path)
     new_settings = {
         "modules": {
             "led": {"brightness": 75},
@@ -223,7 +238,43 @@ def test_store_merge_settings(tmp_path):
 
 
 def test_store_init_creates_parent_dir(tmp_path):
-    """Test dass Store.__init__() uebergeordnete Verzeichnisse erstellt."""
+    """Test that Store.__init__() creates parent directories."""
     nested = tmp_path / "deeply" / "nested" / "subdir" / "store.yaml"
-    store = Store(nested)
+    store = _Store(nested)
     assert store._path.parent.exists()
+
+
+def test_store_get_setting_edge_cases(tmp_path):
+    """Test edge cases for get_setting method."""
+    path = tmp_path / "edge_case_test.yaml"
+
+    # Test with None value
+    test_data = {"modules": {"button": {"enabled": None}}}
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(test_data, f)
+
+    store = _Store(path)
+    assert store.get_setting("modules.button.enabled") is None
+
+    # Test with numeric values
+    test_data = {"core": {"volume": 75}}
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(test_data, f)
+
+    assert store.get_setting("core.volume") == 75
+
+    # Test with complex nested structure
+    test_data = {
+        "alarm": {
+            "schedule": [
+                {"time": "07:30", "enabled": True},
+                {"time": "08:00", "enabled": False}
+            ],
+            "volume": 50
+        }
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(test_data, f)
+
+    assert store.get_setting("alarm.volume") == 50
+    assert store.get_setting("alarm.schedule") == test_data["alarm"]["schedule"]
