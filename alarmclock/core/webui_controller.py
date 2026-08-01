@@ -1,11 +1,8 @@
-"""REST-API module: HTTP control plane for alarms, modules, and settings.
+"""Core WebUI Controller for alarm clock system.
 
-Unlike other modules, webui needs direct access to the Scheduler and the
-full module registry (via attach_context(), called once by the daemon after
-every module has been init()'d - see daemon.py). This is a deliberate,
-single exception to "modules only communicate through the bus": per the
-README's Module Settings Pattern, webui is the only module allowed to expose
-settings changes over HTTP, so it necessarily knows about the other modules.
+This controller provides HTTP control plane functionality directly integrated
+into the core system. It has direct access to the scheduler and modules, which
+is a deliberate design choice since it's a core system component.
 """
 
 from __future__ import annotations
@@ -27,7 +24,7 @@ from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.base import Module
 from alarmclock.modules.settings_types import FIELD_TYPES, SettingsValidationError
 
-logger = logging.getLogger("alarmclock.modules.webui")
+logger = logging.getLogger("alarmclock.core.webui_controller")
 
 WEEKDAY_LABELS: dict[Weekday, str] = {
     Weekday.MONDAY: "Mo",
@@ -136,9 +133,9 @@ class SnoozeRequest(BaseModel):
     minutes: float = 9
 
 
-class WebUIModule(Module):
-    """HTTP control plane. Owns a FastAPI app; routes reach into the
-    Scheduler and other modules via attach_context()."""
+class WebUIController:
+    """HTTP control plane controller. Owns a FastAPI app; routes reach into the
+    Scheduler and other modules directly via attach_context()."""
 
     display_name = "Web UI"
     icon = "globe"
@@ -150,7 +147,10 @@ class WebUIModule(Module):
         config: dict[str, Any] | None = None,
         store: Any = None,
     ) -> None:
-        super().__init__(name, bus, config, store)
+        self.name = name
+        self.bus = bus
+        self.config = config or {}
+        self.store = store
         self._scheduler: Scheduler | None = None
         self._modules: dict[str, Module] = {}
         self._server: uvicorn.Server | None = None
@@ -164,6 +164,7 @@ class WebUIModule(Module):
         self._register_login_routes()
         self._register_routes()
         self._register_ui_routes()
+        self.enabled = True  # Core component, enabled by default
 
     def attach_context(self, scheduler: Scheduler, modules: list[Module]) -> None:
         """Give webui what it needs to act as a control plane. Called once by
@@ -174,17 +175,18 @@ class WebUIModule(Module):
     # -- Module lifecycle -----------------------------------------------------
 
     async def init(self) -> None:
-        self.bus.subscribe(f"{self.name}.settings_changed", self._on_settings_changed)
-
-    async def _on_settings_changed(self, payload: dict[str, Any]) -> None:
-        self.logger.info("settings changed: %s", payload)
-
-    _STARTUP_POLL_INTERVAL = 0.01
-    _STARTUP_TIMEOUT = 5.0
+        """Initialize the web UI controller."""
+        # No special initialization needed - all setup is done in __init__
+        pass
 
     async def enable(self) -> None:
-        host = self.settings.get("host", "0.0.0.0")
-        port = self.settings.get("port", 5000)
+        """Enable the web UI controller."""
+        if self.enabled:
+            return
+
+        self.enabled = True
+        host = self.config.get("host", "0.0.0.0")
+        port = self.config.get("port", 5000)
         config = uvicorn.Config(self.app, host=host, port=port, log_level="info")
         server = uvicorn.Server(config)
 
@@ -204,9 +206,9 @@ class WebUIModule(Module):
         # for whichever happens first so a bind failure surfaces here rather
         # than silently in the background.
         waited = 0.0
-        while not server.started and not task.done() and waited < self._STARTUP_TIMEOUT:
-            await asyncio.sleep(self._STARTUP_POLL_INTERVAL)
-            waited += self._STARTUP_POLL_INTERVAL
+        while not server.started and not task.done() and waited < 5.0:
+            await asyncio.sleep(0.01)
+            waited += 0.01
 
         if not server.started:
             task.cancel()
@@ -214,68 +216,67 @@ class WebUIModule(Module):
 
         self._server = server
         self._server_task = task
-        self.enabled = True
-        self.needs_restart = False
-        self.logger.info("webui listening on %s:%s", host, port)
+        logger.info("webui listening on %s:%s", host, port)
 
     async def disable(self) -> None:
+        """Disable the web UI controller."""
+        if not self.enabled:
+            return
+
+        self.enabled = False
         if self._server is not None:
             self._server.should_exit = True
         if self._server_task is not None:
             await self._server_task
         self._server = None
         self._server_task = None
-        self.enabled = False
 
     async def on_event(self, event: str, payload: Any = None) -> None:
+        """Handle events (no special handling needed for this controller)."""
         pass
 
     # -- settings ---------------------------------------------------------------
 
     def get_settings_schema(self) -> dict[str, dict[str, Any]]:
-        schema = dict(super().get_settings_schema())
-        schema.update(
-            {
-                "host": {
-                    "type": "string",
-                    "label": "Host",
-                    "requires_restart": True,
-                    "default": "0.0.0.0",
-                },
-                "port": {
-                    "type": "int",
-                    "min": 1,
-                    "max": 65535,
-                    "label": "Port",
-                    "requires_restart": True,
-                    "default": 5000,
-                },
-                "password": {
-                    "type": "password",
-                    "label": "Password (empty disables the login prompt)",
-                    "default": "",
-                },
-                "color_profile": {
-                    "type": "select",
-                    "options": [*COLOR_PROFILES, "custom"],
-                    "label": "Farbprofil",
-                    # Consumed client-side by module_settings.html to live-preview
-                    # a profile before it's saved, without a round-trip per pick.
-                    "profiles": COLOR_PROFILES,
-                    "default": "sunrise",
-                },
-                "custom_accent": {
-                    "type": "color",
-                    "label": 'Akzentfarbe',
-                    "default": "#000000",
-                },
-                "custom_accent_strong": {
-                    "type": "color",
-                    "label": 'kräftiger Akzent',
-                    "default": "#000000",
-                },
-            }
-        )
+        """Get the settings schema for this controller."""
+        schema = {
+            "host": {
+                "type": "string",
+                "label": "Host",
+                "requires_restart": True,
+                "default": "0.0.0.0",
+            },
+            "port": {
+                "type": "int",
+                "min": 1,
+                "max": 65535,
+                "label": "Port",
+                "requires_restart": True,
+                "default": 5000,
+            },
+            "password": {
+                "type": "password",
+                "label": "Password (empty disables the login prompt)",
+                "default": "",
+            },
+            "color_profile": {
+                "type": "select",
+                "options": [*COLOR_PROFILES, "custom"],
+                "label": "Farbprofil",
+                "profiles": COLOR_PROFILES,
+                "default": "sunrise",
+            },
+            "custom_accent": {
+                "type": "color",
+                "label": 'Akzentfarbe',
+                "default": "#000000",
+            },
+            "custom_accent_strong": {
+                "type": "color",
+                "label": 'kräftiger Akzent',
+                "default": "#000000",
+            },
+        }
         return schema
 
     def _resolve_accent_colors(self) -> dict[str, str]:
@@ -283,18 +284,20 @@ class WebUIModule(Module):
         implies - used by base.html to theme every page's "important
         elements" (nav, headings, buttons, links, focus rings) from a single
         setting, without every route having to thread it through manually."""
-        profile = self.settings.get("color_profile", "sunrise")
+        profile = self.config.get("color_profile", "sunrise")
         if profile == "custom":
             fallback = COLOR_PROFILES["sunrise"]
             return {
-                "accent": self.settings.get("custom_accent") or fallback["accent"],
-                "accent_strong": self.settings.get("custom_accent_strong")
+                "accent": self.config.get("custom_accent") or fallback["accent"],
+                "accent_strong": self.config.get("custom_accent_strong")
                 or fallback["accent_strong"],
             }
         return COLOR_PROFILES.get(profile, COLOR_PROFILES["sunrise"])
 
     async def update_settings(self, values: dict[str, Any]) -> None:
-        await super().update_settings(values)
+        """Update the settings for this controller."""
+        # Update config with new values
+        self.config.update(values)
         # A settings change may have set/cleared/rotated the password - drop
         # all logged-in sessions rather than track whether this particular
         # update touched it.
@@ -303,23 +306,27 @@ class WebUIModule(Module):
     # -- helpers used by routes ---------------------------------------------
 
     def _get_scheduler(self) -> Scheduler:
+        """Get the scheduler instance (raises HTTPException if not attached)."""
         if self._scheduler is None:
             raise HTTPException(status_code=503, detail="scheduler not attached")
         return self._scheduler
 
     def _get_module(self, name: str) -> Module:
+        """Get a module by name (raises HTTPException if not found)."""
         module = self._modules.get(name)
         if module is None:
             raise HTTPException(status_code=404, detail=f"unknown module {name!r}")
         return module
 
     def _get_weekday(self, day: str) -> Weekday:
+        """Get a weekday enum from string."""
         try:
             return Weekday[day.upper()]
         except KeyError:
             raise HTTPException(status_code=404, detail=f"unknown weekday {day!r}") from None
 
     def _require_free_day(self, scheduler: Scheduler, day: Weekday) -> None:
+        """Check if a day is free (raises HTTPException if not)."""
         if scheduler.is_day_assigned(day):
             raise HTTPException(
                 status_code=409,
@@ -336,7 +343,7 @@ class WebUIModule(Module):
 
         @self.app.middleware("http")
         async def require_auth(request: Request, call_next):
-            password = self.settings.get("password", "")
+            password = self.config.get("password", "")
             if not password:
                 return await call_next(request)
 
@@ -369,7 +376,7 @@ class WebUIModule(Module):
             password: str = Form(""), next: str = Form("/")
         ) -> RedirectResponse:
             safe_next = _safe_next(next)
-            configured = self.settings.get("password", "")
+            configured = self.config.get("password", "")
             if not configured or not _check_password(password, configured):
                 return RedirectResponse(
                     f"/login?next={safe_next}&error=Wrong password", status_code=303
@@ -381,6 +388,7 @@ class WebUIModule(Module):
             return response
 
     def _register_routes(self) -> None:
+        """Register all API routes."""
         app = APIRouter(prefix="/api")
 
         @app.get("/plan")
@@ -500,11 +508,7 @@ class WebUIModule(Module):
         self.app.include_router(app)
 
     def _register_ui_routes(self) -> None:
-        """Server-rendered HTML control panel: classic forms, no JS. Separate
-        routes from the JSON API above (mounted under /api) even though they
-        end up calling the same Scheduler/Module methods - keeps the REST API
-        a pure JSON contract and the HTML pages a pure Post/Redirect/Get
-        flow."""
+        """Register all server-rendered HTML UI routes."""
         app = self.app
         templates = self._templates
 

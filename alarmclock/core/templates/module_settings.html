@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% import "_widgets.html" as widgets %}
+{% block title %}{{ module.display_name or module.name }} settings{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<div class="card">
+<h1>{{ module.display_name or module.name }} settings
+  {{ widgets.restart_hint(module, "/modules/" ~ module.name ~ "/settings") }}
+</h1>
+<form method="post" action="/modules/{{ module.name }}/settings">
+  {% for key, field in schema.items() %}
+    {{ widgets.render_field(key, field, values.get(key), key in locked_fields) }}
+  {% else %}
+    <p>This module has no configurable settings.</p>
+  {% endfor %}
+  {% if schema %}<button type="submit">Save</button>{% endif %}
+</form>
+</div>
+
+<p><a href="/">&larr; back</a></p>
+{% endblock %}
+
+{% block scripts %}
+{% if schema.color_profile is defined %}
+<script>
+(function () {
+  var profileSelect = document.getElementById("field-color_profile");
+  var accentInput = document.getElementById("field-custom_accent");
+  var accentStrongInput = document.getElementById("field-custom_accent_strong");
+  if (!profileSelect || !accentInput || !accentStrongInput) return;
+
+  var profiles = {{ schema.color_profile.profiles | tojson }};
+  var root = document.documentElement.style;
+
+  function apply(accent, accentStrong) {
+    root.setProperty("--accent", accent);
+    root.setProperty("--accent-strong", accentStrong);
+    root.setProperty("--accent-soft-bg", "color-mix(in srgb, " + accent + " 16%, transparent)");
+  }
+
+  function preview() {
+    if (profileSelect.value === "custom") {
+      apply(accentInput.value, accentStrongInput.value);
+    } else if (profiles[profileSelect.value]) {
+      var preset = profiles[profileSelect.value];
+      apply(preset.accent, preset.accent_strong);
+    }
+  }
+
+  function updateVisibility() {
+    var display = profileSelect.value === "custom" ? "" : "none";
+    accentInput.closest(".field").style.display = display;
+    accentStrongInput.closest(".field").style.display = display;
+  }
+
+  profileSelect.addEventListener("change", function () {
+    preview();
+    updateVisibility();
+  });
+  accentInput.addEventListener("input", preview);
+  accentStrongInput.addEventListener("input", preview);
+  updateVisibility();
+})();
+</script>
+{% endif %}
+{% endblock %}

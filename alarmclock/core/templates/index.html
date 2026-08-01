@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% import "_widgets.html" as widgets %}
+{% block title %}Alarm Clock{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+{% macro day_circles_static(group) %}
+  {% for day in all_weekdays %}
+    {% if day in group.days %}
+      <span class="day-circle own">{{ weekday_labels[day] }}</span>
+    {% elif day in day_owner %}
+      <span class="day-circle taken">{{ weekday_labels[day] }}</span>
+    {% else %}
+      <span class="day-circle free">{{ weekday_labels[day] }}</span>
+    {% endif %}
+  {% endfor %}
+{% endmacro %}
+
+{% macro day_checkboxes(current_days, exclude_group_id) %}
+  {% for day in all_weekdays %}
+    {% set taken = day in day_owner and day_owner[day] != exclude_group_id %}
+    <label class="day-circle-label">
+      <input type="checkbox" name="days" value="{{ day.value }}"
+        {% if day in current_days %}checked{% endif %}
+        {% if taken %}disabled{% endif %}>
+      <span class="day-circle{% if taken %} taken{% endif %}">{{ weekday_labels[day] }}</span>
+    </label>
+  {% endfor %}
+{% endmacro %}
+
+<div class="card sleep-plan">
+<h1>Schlafplan</h1>
+
+<div class="master-row">
+  <div>
+    <div class="master-label">Wecker aktiv</div>
+    <div class="master-hint">
+      {% if is_skipped %}Setzt nächsten Wecker aus{% else %}{{ next_alarm_hint }}{% endif %}
+    </div>
+  </div>
+  {% if is_skipped %}
+    <form method="post" action="/plan/override/clear">
+      <button type="submit" class="switch" aria-label="Wecker aktiv"></button>
+    </form>
+  {% else %}
+    <form method="post" action="/plan/master/skip">
+      <button type="submit" class="switch is-on" aria-label="Wecker aktiv"></button>
+    </form>
+  {% endif %}
+</div>
+
+{% if override_time is not none %}
+  <form method="post" action="/plan/override/clear" class="next-field-set">
+    <button type="submit" class="next-field-set-btn">
+      <span class="next-field-set-text">{{ override_time.strftime('%H:%M') }} Uhr</span>
+    </button>
+  </form>
+{% else %}
+  <details class="next-field">
+    <summary>Nächsten Wecker ändern</summary>
+    <form method="post" action="/plan/override" class="next-field-edit">
+      <input type="time" name="time" required autofocus>
+      <button type="submit">Setzen</button>
+    </form>
+  </details>
+{% endif %}
+
+<div class="plan-list">
+  {% if not groups %}
+    <p class="list-hint">Noch kein Schlafplan – leg unten los</p>
+  {% endif %}
+
+  {% for group in groups %}
+    {% set has_override = is_skipped or override_time is not none %}
+    {% set is_affected = (group.id == affected_group_id) and has_override %}
+    <div class="plan-row
+      {%- if not group.enabled %} disabled{% endif %}
+      {%- if group.is_editing %} editing{% endif %}
+      {%- if any_editing and not group.is_editing %} dimmed{% endif %}">
+
+      <form method="post" action="/plan/groups/{{ group.id }}/toggle">
+        <button type="submit" class="switch switch-sm{% if group.enabled %} is-on{% endif %}"
+          {% if group.reenable_blocked %}
+            disabled
+            aria-label="Plan aktivieren nicht möglich: {{ group.reenable_blocked_days | join(', ') }} bereits belegt"
+            title="Nicht aktivierbar: {{ group.reenable_blocked_days | join(', ') }} bereits belegt"
+          {% else %}
+            aria-label="Plan aktiv"
+          {% endif %}
+        ></button>
+      </form>
+
+      {% if group.is_editing %}
+        <form method="post" action="/plan/groups/{{ group.id }}/update" class="row-edit-form">
+          <input type="time" name="time" value="{{ group.time.strftime('%H:%M') }}"
+            required autofocus class="time-edit-input">
+          <div class="days">
+            {{ day_checkboxes(group.days, group.id) }}
+          </div>
+          <div class="row-actions">
+            <button type="submit" class="row-action confirm" aria-label="Speichern">&#10003;</button>
+            <a href="/" class="row-action" aria-label="Abbrechen">&#10005;</a>
+          </div>
+        </form>
+      {% else %}
+        {% if is_affected %}
+          <form method="post" action="/plan/override/clear" class="row-main-form">
+            <button type="submit" class="row-main">
+              <span class="time-display">
+                <span class="was">{{ group.time.strftime('%H:%M') }}</span>
+                {%- if override_time is not none %}<span class="now">{{ override_time.strftime('%H:%M') }}</span>{% endif %}
+              </span>
+              <span class="days">{{ day_circles_static(group) }}</span>
+            </button>
+          </form>
+        {% else %}
+          <a href="/?edit={{ group.id }}" class="row-main">
+            <span class="time-display">{{ group.time.strftime('%H:%M') }}</span>
+            <span class="days">{{ day_circles_static(group) }}</span>
+          </a>
+        {% endif %}
+
+        {% if group.is_confirming_delete %}
+          <form method="post" action="/plan/groups/{{ group.id }}/delete" class="row-actions">
+            <button type="submit" class="row-action delete confirming"
+              aria-label="Wirklich löschen? Nochmal tippen">&#10005;</button>
+          </form>
+        {% else %}
+          <a href="/?confirm_delete={{ group.id }}" class="row-actions">
+            <span class="row-action delete" aria-label="Plan löschen">&#10005;</span>
+          </a>
+        {% endif %}
+      {% endif %}
+    </div>
+  {% endfor %}
+
+  <form method="post" action="/plan/groups" class="plan-row ghost{% if any_editing %} dimmed{% endif %}">
+    <span class="switch switch-sm" aria-hidden="true"></span>
+    <input type="time" name="time" required class="time-edit-input" placeholder="--:--">
+    <div class="days">
+      {{ day_checkboxes([], none) }}
+    </div>
+    <div class="row-actions">
+      <button type="submit" class="row-action confirm" aria-label="Neuen Schlafplan übernehmen">&#10003;</button>
+    </div>
+  </form>
+</div>
+</div>
+
+<div class="card">
+<h1>Modules</h1>
+<table>
+  <thead><tr><th>Name</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for module in modules %}
+    <tr>
+      <td>{{ module.display_name or module.name }}</td>
+      <td>
+        <span class="status-dot status-{{ module.status_class }}"
+          title="{{ module.status_label }}" aria-label="{{ module.status_label }}"></span>
+      </td>
+      <td>
+        <div class="module-controls">
+          {% if module.enabled %}
+            <form method="post" action="/modules/{{ module.name }}/disable" class="inline">
+              <button type="submit" class="switch switch-sm is-on" aria-label="Modul aktiv"></button>
+            </form>
+          {% else %}
+            <form method="post" action="/modules/{{ module.name }}/enable" class="inline">
+              <button type="submit" class="switch switch-sm" aria-label="Modul aktiv"></button>
+            </form>
+          {% endif %}
+          {% if module.has_settings %}
+            <a href="/modules/{{ module.name }}/settings" class="row-action settings"
+              aria-label="Einstellungen" title="Einstellungen">&#9881;</a>
+          {% endif %}
+          {{ widgets.restart_hint(module, "/") }}
+        </div>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Progressive enhancement only: the confirm button already fails safe
+  // server-side (silent no-op) if a browser has JS disabled. This just
+  // makes the button truly `disabled` while no weekday is checked, which
+  // is the only thing that also stops Enter's implicit form submission.
+  (function () {
+    function sync(form) {
+      var btn = form.querySelector(".row-action.confirm");
+      if (!btn) return;
+      btn.disabled = !form.querySelector('input[type="checkbox"]:checked');
+    }
+    document.querySelectorAll(".plan-row.ghost, .row-edit-form").forEach(function (form) {
+      sync(form);
+      form.addEventListener("change", function () { sync(form); });
+    });
+  })();
+</script>
+{% endblock %}

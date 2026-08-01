@@ -14,4 +14,10 @@
     - [ ] jegliche erwähnug von CLI, activate() und deactivate() entfehrnen
 - [ ] repair webui
     - [ ] declutter unused stuff in the html files
-    - [ ]
+    - [x] match new paths to files
+    - [ ] find common way to communicate the settings of modules to the webui
+        - [x] refactor these hardcoded settings to the default_settings.yaml
+        - [x] must include: type of setting, possibilities, default value, interface-element (e.b. [brightness, [0.0,1.0], 0.75, slider])
+
+- [ ] multiple instances of one plugin to map real-world-conditions
+
