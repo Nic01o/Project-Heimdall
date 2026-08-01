@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
-from typing import Callable
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 from alarmclock.core.alarm import SleepPlan, SleepPlanGroup, Weekday
 from alarmclock.core.event_bus import EventBus
-from alarmclock.core.persistence import Store
 
 logger = logging.getLogger("alarmclock.core.scheduler")
 
@@ -31,7 +30,7 @@ class Scheduler:
         timezone: str = "UTC",
         *,
         now: NowFn | None = None,
-        store: Store | None = None,
+        store: Any | None = None,
     ) -> None:
         self.bus = bus
         self.tz = ZoneInfo(timezone)
