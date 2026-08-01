@@ -6,7 +6,7 @@
 - [x] Web-UI-Modul – Widget-Library gemappt auf Field-Type-Vokabular (ein Settings-Tab pro Modul, kein modulspezifischer Frontend-Code)
 - [ ] Light-Modul auf `OutputModule` (siehe Sound) aufbauen - Mock-/Real-Treiber-Split ist jetzt wiederverwendbar, plus Brightness/PWM statt nur an/aus
 - [ ] CI-Setup für automatisierte Tests
-- [ ] merge scheduler and alarm. they should interact like one "alarm clock" (eeeh, dunno)
+- [d] merge scheduler and alarm. they should interact like one "alarm clock
 
 - [ ] complete daemon:run
 - [ ] refactor base.py
