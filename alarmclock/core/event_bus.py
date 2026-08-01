@@ -7,11 +7,9 @@ from __future__ import annotations
 
 import abc
 import asyncio
-import logging
 from collections import defaultdict
 from typing import Any, Awaitable, Callable
-
-logger = logging.getLogger("alarmclock.core.event_bus")
+from alarmclock.core.logger_wrapper import logger
 
 Handler = Callable[[dict[str, Any]], Awaitable[None]]
 

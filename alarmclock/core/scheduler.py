@@ -4,13 +4,11 @@ Hardware-independent."""
 from __future__ import annotations
 import asyncio
 import datetime
-import logging
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 from alarmclock.core.alarm import SleepPlan, SleepPlanGroup, Weekday
 from alarmclock.core.event_bus import EventBus
-
-logger = logging.getLogger("alarmclock.core.scheduler")
+from alarmclock.core.logger_wrapper import logger
 
 NowFn = Callable[[], datetime.datetime]
 

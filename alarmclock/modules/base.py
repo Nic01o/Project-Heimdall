@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import abc
 import asyncio
-import logging
 from typing import Any
+from alarmclock.core.logger_wrapper import logger as logger_wrapper
 
 from alarmclock.modules.settings_types import SettingsValidationError, validate_against_schema
 
@@ -49,7 +49,7 @@ class Module(abc.ABC):
         # own fields it just consumed. Modules with no requires_restart
         # fields never need to touch this.
         self.needs_restart = False
-        self.logger = logging.getLogger(f"alarmclock.modules.{name}")
+        self.logger = logger_wrapper
 
         schema = self.get_settings_schema()
         defaults = {key: field["default"] for key, field in schema.items() if "default" in field}

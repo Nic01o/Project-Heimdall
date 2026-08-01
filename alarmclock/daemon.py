@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
-import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -13,8 +12,9 @@ from alarmclock.core.event_bus import EventBus
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.core.webui_controller import WebUIController
 from alarmclock.modules.base import Module
+from alarmclock.core.logger_wrapper import logger
 
-logger = logging.getLogger("alarmclock.daemon")
+# Konfigurationspfade als absolute Paths (bereits ausgewertet)
 
 # Konfigurationspfade als absolute Paths (bereits ausgewertet)
 HARDWARE_CONFIG_PATH: Path = __import__("pathlib").Path(__file__).resolve().parent.parent / "config" / "hardware_config.yaml"
@@ -133,9 +133,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=args.log_level.upper(), format="%(asctime)s %(name)s %(levelname)s %(message)s"
-    )
 
     asyncio.run(run(args.demo_alarm_seconds))
 

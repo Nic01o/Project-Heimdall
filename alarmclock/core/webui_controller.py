@@ -8,7 +8,6 @@ is a deliberate design choice since it's a core system component.
 from __future__ import annotations
 import asyncio
 import datetime
-import logging
 import secrets
 from pathlib import Path
 from typing import Any
@@ -23,8 +22,7 @@ from alarmclock.core.alarm import Weekday
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.base import Module
 from alarmclock.modules.settings_types import FIELD_TYPES, SettingsValidationError
-
-logger = logging.getLogger("alarmclock.core.webui_controller")
+from alarmclock.core.logger_wrapper import logger
 
 WEEKDAY_LABELS: dict[Weekday, str] = {
     Weekday.MONDAY: "Mo",
