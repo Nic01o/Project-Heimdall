@@ -1,12 +1,13 @@
 module:
     led:
+      pin: 0
       actions:
-        "press": "ignore",
-        "release": "ignore",
-        "click": "ignore",
-        "double_click": "ignore",
-        "multi_click": "ignore",
-        "long_press": "ignore",
+        "press": "ignore"
+        "release": "ignore"
+        "click": "ignore"
+        "double_click": "ignore"
+        "multi_click": "ignore"
+        "long_press": "ignore"
 
 
 

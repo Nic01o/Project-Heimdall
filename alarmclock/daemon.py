@@ -8,7 +8,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
-from alarmclock.core.persistence import Store, _load_settings
+from alarmclock.core.settings import Settings
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.core.webui_controller import WebUIController
@@ -25,9 +25,15 @@ WATCHED_EVENTS = ("alarm.triggered", "alarm.stopped", "alarm.snoozed")
 
 async def run(demo_alarm_seconds: int | None) -> None:
     # load settings from persistent storage (sync function now)
-    settings_data = _load_settings(HARDWARE_CONFIG_PATH, SETTINGS_PATH)
+    settings = Settings.get_instance(
+        hardware_config_path=HARDWARE_CONFIG_PATH, settings_path=SETTINGS_PATH
+    )
+    settings_data = settings.load_configuration()
 
     logger.info(f"Loaded configuration with {len(settings_data)} setting groups")
+
+    # deleting settings_data for good meassure
+    del settings_data
 
     # Setup event bus
     bus = EventBus()
@@ -38,20 +44,16 @@ async def run(demo_alarm_seconds: int | None) -> None:
     # Setup modules (including core webui controller)
     modules: list[Module] = []
 
-    # Create a store for persistence
-    store = Store()
-
     # Initialize WebUI Controller directly as a core component
     # This is the special case - webui gets direct access to scheduler and modules
     webui_controller = WebUIController(
         name="webui",
         bus=bus,
-        config=settings_data.get("webui", {}),  # Get webui settings from config
-        store=store
+        config=settings.get_setting("webui", {}),
     )
 
     # Load regular modules from config
-    module_configs = settings_data.get("modules", {})
+    module_configs = settings.get_setting("modules", {})
     for module_name, module_config in module_configs.items():
         if module_name == "webui":
             # Skip - we already created the core webui controller above
@@ -65,7 +67,7 @@ async def run(demo_alarm_seconds: int | None) -> None:
                     name=module_name,
                     bus=bus,
                     config=module_config,
-                    store=store
+                    store=settings
                 )
                 modules.append(module_instance)
         except (ImportError, AttributeError) as e:
@@ -88,7 +90,7 @@ async def run(demo_alarm_seconds: int | None) -> None:
             await module.enable()
 
     # Enable webui controller (it's a core component, so it should be enabled by default)
-    if settings_data.get("webui", {}).get("enabled", True):
+    if settings.get_setting("webui", None) is not None:
         await webui_controller.enable()
     else:
         await webui_controller.disable()
