@@ -1,5 +1,8 @@
 # Project Heimdall – TODOfile
 
+
+## rebuilding
+
 - [ ] systemd-Unit + Watchdog-Integration (sd_notify)
 - [x] Web-UI-Modul – REST-API (Alarme, Modul enable/disable, Settings-Schema/get/update) – einziger Online-Weg zum Ändern von Settings
 - [x] Web-UI-Modul – Frontend: generisches Settings-Formular-Rendering aus Modul-Schema (Jinja2-Templates statt React, klassische Forms ohne JS)
@@ -14,10 +17,43 @@
     - [ ] jegliche erwähnug von CLI, activate() und deactivate() entfehrnen
 - [ ] repair webui
     - [ ] declutter unused stuff in the html files
+    - [ ] remove "store" var from method vars, bc its a singleton and does not need passing
     - [x] match new paths to files
     - [ ] find common way to communicate the settings of modules to the webui
         - [x] refactor these hardcoded settings to the default_settings.yaml
         - [x] must include: type of setting, possibilities, default value, interface-element (e.b. [brightness, [0.0,1.0], 0.75, slider])
 
 - [ ] multiple instances of one plugin to map real-world-conditions
+
+- [x] rebuilding the persistence methods to use one settings interface
+
+
+## expansion
+
+### modules
+
+#### Inputs
+- [ ] Microphone
+- [ ] Light sensor
+
+
+#### Outputs
+- [ ] Light
+- [ ] LCD
+- [ ] Sound
+
+
+
+#### Software
+- [ ] Wakeup- / Sleeptime recording and evaluation
+
+
+
+
+
+## bugreports
+
+- [x] settings.py: `Settings.load_configuration()` reads hardware config from `Path(__file__).parent / "hardware_config.yaml"` (alarmclock/core/hardware_config.yaml), but that file doesn't exist there — the real one lives at config/hardware_config.yaml (daemon.py already points there correctly). Currently raises FileNotFoundError whenever load_configuration() is called.
+
+
 

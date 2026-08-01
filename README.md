@@ -29,26 +29,45 @@ python -m alarmclock.daemon
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│         Alarm Clock Daemon              │
-│         (Python, asyncio)               │
-├─────────────────────────────────────────┤
-│  Core                    │  Modules     │
-│  • Scheduler             │  • Sound     │
-│  • Event Bus             │  • Light     │
-│  • Config Manager        │  • Web UI    │
-│  • Persistence           │  • (others)  │
-└─────────────────────────────────────────┘
-↕ systemd watchdog   ↕ (optional remote adapters)           
+┌─────────┐   ┌─────────────────────────────────────────┐   ┌─────────┐
+│   LED   │◀──│         Alarm Clock Daemon              │──▶│ Button  │
+│ (output)│   │         (Python, asyncio)               │   │ (input) │
+└─────────┘   ├─────────────────────────────────────────┤   └─────────┘
+              │  Core                                   │
+              │  • Scheduler                            │
+              │  • Event Bus                            │
+              │  • Alarm                                │
+              │  • WebUI Controller                     │
+              │  • Settings                             │
+              └─────────────────────────────────────────┘
 ```
 
-**Core**: Manages alarm scheduling, fires events, persists state (JSON key/value store; SQLite is a possible later upgrade). Knows nothing about hardware.
+**Core**: Manages alarm scheduling, fires events, persists state via the `Settings` class (YAML-backed store). Knows nothing about hardware.
+
+**LED** and **Button** are examples for the clock's actual physical I/O: LED is an output module driving a status LED, Button an input module reading a physical button - both are regular plugins like any other, just drawn separately here since they're the two modules that talk to real hardware pins rather than to other software.
 
 **Modules**: Attach via plugin interface, listen for events, emit their own events. Each module has a mock (testable) and real (hardware-aware) implementation.
 
 **Event Bus**: Pub/Sub within the process. Transport layer is pluggable—initially in-memory, later Unix-socket for remote modules.
 
 **Watchdog**: systemd integration to auto-restart the daemon if it hangs.
+
+## Configuration and Storage
+
+The configuration system uses a hierarchical approach with multiple layers:
+
+1. **Hardware Configuration**: Activates hardware from software
+2. **Default Settings**: Core defaults and module defaults
+3. **User Preferences**: Dynamic user preferences and runtime values that overwrite defaults
+
+Settings are managed through the `Settings` class which provides:
+- Singleton access via `Settings.get_instance()`
+- Support for nested settings with dot notation (e.g. "modules.button.enabled")
+- Methods for getting, setting, updating, and removing individual settings
+- Configuration loading and saving capabilities
+- Persistence through a Store class that handles YAML file operations
+
+The system provides a unified interface for all configuration management needs.
 
 ## Project Structure
 
@@ -60,7 +79,7 @@ Project-Heimdall/
 │   │   ├── scheduler.py        # Sleep plan scheduling logic
 │   │   ├── event_bus.py        # Event pub/sub
 │   │   ├── config.py           # YAML config loading
-│   │   └── persistence.py      # JSON key/value store (JSONStore)
+│   │   └── settings.py         # Settings singleton + YAML-backed store
 │   ├── modules/
 │   │   ├── base.py             # Plugin interface (abc.ABC) + settings pattern
 │   │   ├── settings_types.py   # Shared field-type vocabulary + validation
@@ -76,7 +95,7 @@ Project-Heimdall/
 ├── tests/
 │   ├── test_scheduler.py
 │   ├── test_settings.py
-│   ├── test_persistence.py
+│   ├── test_store.py
 │   ├── test_webui.py           # REST API
 │   ├── test_webui_pages.py     # server-rendered pages
 │   └── test_integration.py     # Core -> Bus -> Module round trip
@@ -219,12 +238,12 @@ class Module(abc.ABC):
         validated = validate_against_schema(values, schema)  # generic, from settings_types.py
         self.settings = {**self.settings, **validated}
         if self.store is not None:
-            self.store.set(f"modules.{self.name}", self.settings)  # JSONStore, see core/persistence.py
+            self.store.set(f"modules.{self.name}", self.settings)  # see core/settings.py
         await self.bus.emit(f'{self.name}.settings_changed', self.settings)
 ```
 
-`self.store` is an optional `JSONStore` the daemon passes to every module at
-construction time (`core/persistence.py`). It's also what restores settings on
+`self.store` is an optional store (`core/settings.py`'s `Settings.get_store()`)
+the daemon passes to every module at construction time. It's also what restores settings on
 the next boot: `Module.__init__` overlays any previously persisted
 `modules.<name>` value on top of the YAML defaults from `config.yaml`.
  
