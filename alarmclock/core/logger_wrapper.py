@@ -155,6 +155,38 @@ class LoggerWrapper:
         """Disable colored output."""
         self.use_colors = False
 
+
+class _ModuleNameFilter(logging.Filter):
+    """Tags every record passing through with a fixed module_name, so a
+    third-party logger's own records (which never pass module_name=...)
+    still get the "[name]" prefix ColoredFormatter uses for the rest of
+    the app."""
+
+    def __init__(self, module_name: str):
+        super().__init__()
+        self.module_name = module_name
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "module_name"):
+            record.module_name = self.module_name
+        return True
+
+
+def configure_external_logger(name: str, module_name: str, use_colors: bool = True) -> None:
+    """Route a third-party logger (e.g. uvicorn's "uvicorn"/"uvicorn.access")
+    through the same timestamped ColoredFormatter as the rest of the app.
+    Without this, uvicorn.Config installs its own logging config on those
+    loggers, which prints as bare "INFO:     message" instead of matching
+    our format."""
+    external_logger = logging.getLogger(name)
+    external_logger.handlers = []
+    external_logger.propagate = False
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(ColoredFormatter(use_colors=use_colors))
+    handler.addFilter(_ModuleNameFilter(module_name))
+    external_logger.addHandler(handler)
+
+
 # Global instance for convenience
 logger = LoggerWrapper(__name__)
 

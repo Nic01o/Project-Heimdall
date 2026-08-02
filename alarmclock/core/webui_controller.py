@@ -27,7 +27,7 @@ from alarmclock.modules.settings_types import (
     SettingsValidationError,
     validate_against_schema,
 )
-from alarmclock.core.logger_wrapper import logger
+from alarmclock.core.logger_wrapper import configure_external_logger, logger
 
 WEEKDAY_LABELS: dict[Weekday, str] = {
     Weekday.MONDAY: "Mo",
@@ -200,7 +200,12 @@ class WebUIController:
         self.enabled = True
         host = self.settings.get("host", "0.0.0.0")
         port = self.settings.get("port", 5000)
-        config = uvicorn.Config(self.app, host=host, port=port, log_level="info")
+        # log_config=None skips uvicorn's own logging setup (which would
+        # otherwise print unformatted "INFO:     message" lines) - route its
+        # loggers through our own formatter instead.
+        config = uvicorn.Config(self.app, host=host, port=port, log_level="info", log_config=None)
+        configure_external_logger("uvicorn", "uvicorn")
+        configure_external_logger("uvicorn.access", "uvicorn")
         server = uvicorn.Server(config)
 
         async def serve() -> None:
@@ -229,7 +234,7 @@ class WebUIController:
 
         self._server = server
         self._server_task = task
-        logger.info("webui listening on %s:%s", host, port)
+        logger.info("webui listening on %s:%s", host, port, module_name="uvicorn")
 
     async def disable(self) -> None:
         """Disable the web UI controller."""
