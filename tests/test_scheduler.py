@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.core.alarm import Weekday
+from alarmclock.core.settings import SettingsStore
 
 
 class MockEventBus:
@@ -809,6 +810,41 @@ async def test_set_group_enabled_conflict_on_reenable(consecutive_days_scheduler
     # Disable the group - this releases Mon & Fri days
     sched = Scheduler(bus=bus, timezone="UTC", now=lambda: _BASE_TIME)
     sched.create_group(frozenset([Weekday.FRIDAY]), time(8, 0))
+
+
+# ============================================================================
+# Persistence (real SettingsStore backed by TOML on disk)
+# ============================================================================
+
+def test_plan_survives_restart_via_store(tmp_path):
+    """A group, an override, and a snooze all round-trip through a real
+    TOML-backed store into a freshly constructed Scheduler."""
+    store = SettingsStore(tmp_path / "settings.toml")
+    bus = MockEventBus()
+
+    sched = Scheduler(bus=bus, timezone="UTC", now=lambda: _BASE_TIME, store=store)
+    sched.create_group(frozenset([Weekday.MONDAY]), time(7, 0))
+    sched.set_day_once(Weekday.SATURDAY, None)  # skip override
+
+    restarted = Scheduler(bus=bus, timezone="UTC", now=lambda: _BASE_TIME, store=store)
+    plan = restarted.get_plan()
+
+    assert len(plan.groups) == 1
+    assert plan.groups[0].days == frozenset([Weekday.MONDAY])
+    assert plan.groups[0].time == time(7, 0)
+    assert None in plan.overrides.values()
+
+
+@pytest.mark.asyncio
+async def test_snooze_persists_across_restart(tmp_path):
+    store = SettingsStore(tmp_path / "settings.toml")
+    bus = MockEventBus()
+
+    sched = Scheduler(bus=bus, timezone="UTC", now=lambda: _BASE_TIME, store=store)
+    await sched.snooze_alarm(minutes=9)
+
+    restarted = Scheduler(bus=bus, timezone="UTC", now=lambda: _BASE_TIME, store=store)
+    assert restarted.get_plan().snooze_until == _BASE_TIME + timedelta(minutes=9)
 
 
 # ============================================================================

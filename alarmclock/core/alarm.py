@@ -79,11 +79,13 @@ class SleepPlan:
         return {
             "groups": [group.to_dict() for group in self.groups],
             "overrides": {
-                date.isoformat(): (time.isoformat() if time else None)
+                # TOML has no null, so a skipped occurrence is "" rather than
+                # None - from_dict()'s falsy check already treats "" as None.
+                date.isoformat(): (time.isoformat() if time else "")
                 for date, time in self.overrides.items()
             },
             "enabled": self.enabled,
-            "snooze_until": self.snooze_until.isoformat() if self.snooze_until else None,
+            "snooze_until": self.snooze_until.isoformat() if self.snooze_until else "",
         }
 
     @classmethod

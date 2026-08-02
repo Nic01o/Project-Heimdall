@@ -49,7 +49,7 @@ async def run(demo_alarm_seconds: int | None) -> None:
     bus = EventBus()
 
     # Setup scheduler
-    scheduler = Scheduler(bus=bus)
+    scheduler = Scheduler(bus=bus, store=store)
 
     # Setup modules (including core webui controller)
     modules: list[Module] = []
