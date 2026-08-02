@@ -84,7 +84,9 @@ def test_webui_controller_init():
     assert controller.name == "webui"
     assert controller.bus == bus
     assert controller.config == config
-    assert controller.enabled is True
+    # Starts disabled - enable() (called once by daemon.py at startup) is
+    # what actually flips this and binds the server.
+    assert controller.enabled is False
 
 
 def test_get_settings_schema():
@@ -129,10 +131,11 @@ def test_resolve_accent_colors_custom():
     bus = MockEventBus()
     controller = WebUIController(name="webui", bus=bus)
 
-    # Set custom colors in config
-    controller.config["color_profile"] = "custom"
-    controller.config["custom_accent"] = "#ff0000"
-    controller.config["custom_accent_strong"] = "#cc0000"
+    # Set custom colors (settings, not wiring config - this is what
+    # _resolve_accent_colors actually reads)
+    controller.settings["color_profile"] = "custom"
+    controller.settings["custom_accent"] = "#ff0000"
+    controller.settings["custom_accent_strong"] = "#cc0000"
 
     colors = controller._resolve_accent_colors()
 
@@ -146,8 +149,8 @@ def test_resolve_accent_colors_fallback():
     controller = WebUIController(name="webui", bus=bus)
 
     # Set custom colors to None/invalid
-    controller.config["color_profile"] = "custom"
-    controller.config["custom_accent"] = None
+    controller.settings["color_profile"] = "custom"
+    controller.settings["custom_accent"] = None
 
     colors = controller._resolve_accent_colors()
 
@@ -219,8 +222,8 @@ def test_update_settings():
     values = {"host": "localhost", "port": 8080}
     asyncio.run(controller.update_settings(values))
 
-    assert controller.config["host"] == "localhost"
-    assert controller.config["port"] == 8080
+    assert controller.settings["host"] == "localhost"
+    assert controller.settings["port"] == 8080
 
 
 def test_init():

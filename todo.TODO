@@ -8,25 +8,44 @@
 - [x] Web-UI-Modul – Frontend: generisches Settings-Formular-Rendering aus Modul-Schema (Jinja2-Templates statt React, klassische Forms ohne JS)
 - [x] Web-UI-Modul – Widget-Library gemappt auf Field-Type-Vokabular (ein Settings-Tab pro Modul, kein modulspezifischer Frontend-Code)
 - [ ] Light-Modul auf `OutputModule` (siehe Sound) aufbauen - Mock-/Real-Treiber-Split ist jetzt wiederverwendbar, plus Brightness/PWM statt nur an/aus
-- [ ] CI-Setup für automatisierte Tests
-- [d] merge scheduler and alarm. they should interact like one "alarm clock
+- [d] CI-Setup für automatisierte Tests
+- [d] merge scheduler and alarm. they should interact like one "alarm clock"
 
-- [ ] complete daemon:run
+- [x] complete daemon:run (config refactor, see CONFIG_REFACTOR_PLAN.md: builds modules from
+      hardware.toml, actually calls enable(); KeyboardInterrupt handling still open, see bugreports)
 - [ ] refactor base.py
-    - [ ] sodass es eine generische anzahl an pins mit verschiedenen Namen übernehmen kann
+    - [x] sodass es eine generische anzahl an pins mit verschiedenen Namen übernehmen kann
+          (hardware.toml instance registry, see CONFIG_REFACTOR_PLAN.md D3)
     - [ ] jegliche erwähnug von CLI, activate() und deactivate() entfehrnen
 - [ ] repair webui
     - [ ] declutter unused stuff in the html files
-    - [ ] remove "store" var from method vars, bc its a singleton and does not need passing
+    - [x] remove "store" var from method vars, bc its a singleton and does not need passing
+          -> resolved the other way: there is no singleton anymore. SettingsStore/HardwareRegistry
+          are plain instances, passed explicitly (see CONFIG_REFACTOR_PLAN.md)
     - [x] match new paths to files
-    - [ ] find common way to communicate the settings of modules to the webui
+    - [x] find common way to communicate the settings of modules to the webui
         - [x] refactor these hardcoded settings to the default_settings.yaml
         - [x] must include: type of setting, possibilities, default value, interface-element (e.b. [brightness, [0.0,1.0], 0.75, slider])
 
-- [ ] multiple instances of one plugin to map real-world-conditions
+- [x] multiple instances of one plugin to map real-world-conditions
+      (hardware.toml's [[instances]], see CONFIG_REFACTOR_PLAN.md D3)
 
 - [x] rebuilding the persistence methods to use one settings interface
+- [x] fix settings/schema reconciliation: (see CONFIG_REFACTOR_PLAN.md for the full rebuild)
+  - [x] fix `Settings.load_configuration()` shallow merge bug (deep merge)
+        -> load_configuration() removed entirely, no more tree-wide merge step to have a bug in
+  - [x] fix `default_settings.yaml` files (correct keys, valid YAML, matching field names)
+        -> superseded by get_settings_schema() defaults, nothing parses default_settings.yaml anymore
+  - [x] fix `daemon.py` module config wiring (use hardware_config.yaml entries for `config=`, not settings values)
+        -> now uses hardware.toml entries
+  - [x] fix WebUIController persistence (store settings through the store under `core.webui`)
+        -> stores under key "webui" via SettingsStore, same idea
+  - [ ] fix Scheduler timezone/store wiring
+  - [x] add test coverage for deep merge regression
+        -> N/A, the merge step this guarded against no longer exists; new coverage is
+        tests/test_store.py + tests/test_settings.py for SettingsStore/HardwareRegistry
 
+- [ ] add logger upload to data/daemon.log
 
 ## expansion
 
@@ -35,6 +54,8 @@
 #### Inputs
 - [ ] Microphone
 - [ ] Light sensor
+- [ ] Switch (the one that makes the "click")
+- [ ] Rotary encoder
 
 
 #### Outputs
@@ -43,17 +64,66 @@
 - [ ] Sound
 
 
-
-#### Software
+#### Features
 - [ ] Wakeup- / Sleeptime recording and evaluation
-
-
-
-
+- [ ] add hints to the webui
 
 ## bugreports
 
 - [x] settings.py: `Settings.load_configuration()` reads hardware config from `Path(__file__).parent / "hardware_config.yaml"` (alarmclock/core/hardware_config.yaml), but that file doesn't exist there — the real one lives at config/hardware_config.yaml (daemon.py already points there correctly). Currently raises FileNotFoundError whenever load_configuration() is called.
+      -> moot: load_configuration() and hardware_config.yaml/.py are both gone, see CONFIG_REFACTOR_PLAN.md
 
+- [ ] KeyboardInterrupt handling in daemon.py: When Ctrl+C is pressed during execution, the program may crash instead of shutting down gracefully. The try/except block around the main loop should catch KeyboardInterrupt but may not be working properly due to how asyncio.run() handles exceptions during initialization vs execution.
 
+- [ ] fix logger showing itself as the calling module, even if the daemon called it
+      (separate from the module_name/*args ordering bug fixed in this refactor - that one made
+      positional format args silently swallowed, e.g. "webui listening on %s:%s"; this one is
+      about the displayed module name itself when none is passed)
+- [x] fix settings and hardware_config.py loading (config refactor, see CONFIG_REFACTOR_PLAN.md)
 
+## code quality and architecture
+
+- [ ] Complete implementation of systemd unit file with watchdog integration (sd_notify) - currently only planned but not implemented
+- [ ] Implement proper shutdown sequence for all modules when daemon receives SIGTERM/SIGINT
+- [ ] Add comprehensive logging throughout the system with consistent log levels and formats
+- [ ] Refactor scheduler to properly handle multiple alarms and timezones
+- [ ] Improve module initialization to support more flexible configuration loading
+- [ ] Implement proper error handling in event bus for failed message delivery
+- [ ] Add unit tests for core components (scheduler, event bus, settings)
+- [ ] Complete integration testing between all modules
+
+## documentation
+
+- [D] Create comprehensive API documentation for the REST endpoints
+- [ ] Document module interface and plugin development guidelines in detail
+- [ ] Add usage examples for each implemented module
+- [ ] Create a configuration guide explaining all possible settings
+- [d] Write developer setup instructions including environment variables and testing
+
+## feature enhancements
+
+- [ ] Implement advanced alarm features like gradual wake-up or sound selection
+- [ ] Add support for external input devices (microphone, light sensor, rotary encoder)
+- [ ] Implement persistent storage with backup/restore capability
+- [ ] Add configuration validation to prevent invalid settings from being saved
+- [ ] Implement module lifecycle management (enable/disable during runtime)
+- [ ] Add support for multiple concurrent alarm groups
+- [ ] Implement advanced scheduling features (repeating alarms, exceptions)
+- [ ] Add integration tests for the complete system with mock hardware
+
+## testing
+
+- [ ] Add unit tests for all core modules (button, led, webui)
+- [ ] Create integration tests that simulate real hardware interactions
+- [ ] Implement test coverage for settings schema validation
+- [ ] Add end-to-end tests for the complete alarm flow
+- [ ] Write tests for edge cases in event handling
+- [ ] Create performance tests for high-frequency events
+
+## security
+
+- [ ] Implement secure password handling for web UI
+- [ ] Add input validation and sanitization for all user inputs
+- [ ] Implement proper access control for REST API endpoints
+- [ ] Add support for HTTPS for web UI (if needed)
+- [ ] Review all configuration files for sensitive data exposure

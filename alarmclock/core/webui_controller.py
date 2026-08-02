@@ -20,8 +20,13 @@ from pydantic import BaseModel
 from starlette.datastructures import FormData
 from alarmclock.core.alarm import Weekday
 from alarmclock.core.scheduler import Scheduler
+from alarmclock.core.settings import SettingsStore
 from alarmclock.modules.base import Module
-from alarmclock.modules.settings_types import FIELD_TYPES, SettingsValidationError
+from alarmclock.modules.settings_types import (
+    FIELD_TYPES,
+    SettingsValidationError,
+    validate_against_schema,
+)
 from alarmclock.core.logger_wrapper import logger
 
 WEEKDAY_LABELS: dict[Weekday, str] = {
@@ -143,7 +148,7 @@ class WebUIController:
         name: str,
         bus: Any,
         config: dict[str, Any] | None = None,
-        store: Any = None,
+        store: SettingsStore | None = None,
     ) -> None:
         self.name = name
         self.bus = bus
@@ -154,6 +159,13 @@ class WebUIController:
         self._server: uvicorn.Server | None = None
         self._server_task: asyncio.Task[None] | None = None
         self._sessions: set[str] = set()
+
+        schema = self.get_settings_schema()
+        defaults = {key: field["default"] for key, field in schema.items() if "default" in field}
+        persisted = self.store.get(name) if self.store is not None else None
+        known_persisted = {key: value for key, value in (persisted or {}).items() if key in schema}
+        self.settings: dict[str, Any] = {**defaults, **known_persisted}
+
         self.app = FastAPI(title="Alarm Clock")
         self.app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
         self._templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -162,7 +174,10 @@ class WebUIController:
         self._register_login_routes()
         self._register_routes()
         self._register_ui_routes()
-        self.enabled = True  # Core component, enabled by default
+        # Core component, enabled by default - but starts False so enable()
+        # (called once by daemon.py at startup) actually does its job of
+        # binding the server instead of no-op'ing on its own guard.
+        self.enabled = False
 
     def attach_context(self, scheduler: Scheduler, modules: list[Module]) -> None:
         """Give webui what it needs to act as a control plane. Called once by
@@ -183,8 +198,8 @@ class WebUIController:
             return
 
         self.enabled = True
-        host = self.config.get("host", "0.0.0.0")
-        port = self.config.get("port", 5000)
+        host = self.settings.get("host", "0.0.0.0")
+        port = self.settings.get("port", 5000)
         config = uvicorn.Config(self.app, host=host, port=port, log_level="info")
         server = uvicorn.Server(config)
 
@@ -282,20 +297,24 @@ class WebUIController:
         implies - used by base.html to theme every page's "important
         elements" (nav, headings, buttons, links, focus rings) from a single
         setting, without every route having to thread it through manually."""
-        profile = self.config.get("color_profile", "sunrise")
+        profile = self.settings.get("color_profile", "sunrise")
         if profile == "custom":
             fallback = COLOR_PROFILES["sunrise"]
             return {
-                "accent": self.config.get("custom_accent") or fallback["accent"],
-                "accent_strong": self.config.get("custom_accent_strong")
+                "accent": self.settings.get("custom_accent") or fallback["accent"],
+                "accent_strong": self.settings.get("custom_accent_strong")
                 or fallback["accent_strong"],
             }
         return COLOR_PROFILES.get(profile, COLOR_PROFILES["sunrise"])
 
     async def update_settings(self, values: dict[str, Any]) -> None:
-        """Update the settings for this controller."""
-        # Update config with new values
-        self.config.update(values)
+        """Validate and store new settings. Persists only the diff, same
+        convention as Module.update_settings()."""
+        schema = self.get_settings_schema()
+        validated = validate_against_schema(values, schema)
+        self.settings = {**self.settings, **validated}
+        if self.store is not None:
+            self.store.set(self.name, validated)
         # A settings change may have set/cleared/rotated the password - drop
         # all logged-in sessions rather than track whether this particular
         # update touched it.
@@ -341,7 +360,7 @@ class WebUIController:
 
         @self.app.middleware("http")
         async def require_auth(request: Request, call_next):
-            password = self.config.get("password", "")
+            password = self.settings.get("password", "")
             if not password:
                 return await call_next(request)
 
@@ -374,7 +393,7 @@ class WebUIController:
             password: str = Form(""), next: str = Form("/")
         ) -> RedirectResponse:
             safe_next = _safe_next(next)
-            configured = self.config.get("password", "")
+            configured = self.settings.get("password", "")
             if not configured or not _check_password(password, configured):
                 return RedirectResponse(
                     f"/login?next={safe_next}&error=Wrong password", status_code=303

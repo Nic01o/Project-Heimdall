@@ -1,0 +1,8 @@
+# Instance registry: which module instances exist on this device, and how
+# they're wired. Hand-edited only; only touch this while the daemon is
+# stopped. The web UI may read this file but must never write it.
+
+[[instances]]
+id = "led_front"
+module = "led"
+driver = "mock"

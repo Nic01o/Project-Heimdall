@@ -4,36 +4,46 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
-import os
 from pathlib import Path
-from typing import Any
-from alarmclock.core.settings import Settings
+from alarmclock.core.settings import HardwareRegistry, SettingsStore
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.core.webui_controller import WebUIController
 from alarmclock.modules.base import Module
 from alarmclock.core.logger_wrapper import logger
 
-# Konfigurationspfade als absolute Paths (bereits ausgewertet)
-
-# Konfigurationspfade als absolute Paths (bereits ausgewertet)
-HARDWARE_CONFIG_PATH: Path = __import__("pathlib").Path(__file__).resolve().parent.parent / "config" / "hardware_config.yaml"
-SETTINGS_PATH: Path = __import__("pathlib").Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
+CONFIG_DIR: Path = Path(__file__).resolve().parent.parent / "config"
+HARDWARE_PATH: Path = CONFIG_DIR / "hardware.toml"
+SETTINGS_PATH: Path = CONFIG_DIR / "settings.toml"
 
 WATCHED_EVENTS = ("alarm.triggered", "alarm.stopped", "alarm.snoozed")
 
 
+def _load_module_class(module_type: str) -> type[Module] | None:
+    """Import alarmclock.modules.<module_type>.<module_type> and return the
+    concrete Module subclass it defines, if any."""
+    try:
+        module_file = importlib.import_module(f"alarmclock.modules.{module_type}.{module_type}")
+    except ImportError as e:
+        logger.warning(f"Could not import module type {module_type!r}: {e}", module_name="daemon")
+        return None
+    for obj in vars(module_file).values():
+        if (
+            isinstance(obj, type)
+            and issubclass(obj, Module)
+            and obj is not Module
+            and obj.__module__ == module_file.__name__
+        ):
+            return obj
+    return None
+
+
 async def run(demo_alarm_seconds: int | None) -> None:
-    # load settings from persistent storage (sync function now)
-    settings = Settings.get_instance(
-        hardware_config_path=HARDWARE_CONFIG_PATH, settings_path=SETTINGS_PATH
-    )
-    settings_data = settings.load_configuration()
+    hardware = HardwareRegistry(HARDWARE_PATH)
+    store = SettingsStore(SETTINGS_PATH)
+    instances = hardware.instances()
 
-    logger.info(f"Loaded configuration with {len(settings_data)} setting groups")
-
-    # deleting settings_data for good meassure
-    del settings_data
+    logger.info(f"Loaded {len(instances)} hardware instance(s)", module_name="daemon")
 
     # Setup event bus
     bus = EventBus()
@@ -49,29 +59,23 @@ async def run(demo_alarm_seconds: int | None) -> None:
     webui_controller = WebUIController(
         name="webui",
         bus=bus,
-        config=settings.get_setting("webui", {}),
+        store=store,
     )
 
-    # Load regular modules from config
-    module_configs = settings.get_setting("modules", {})
-    for module_name, module_config in module_configs.items():
-        if module_name == "webui":
-            # Skip - we already created the core webui controller above
+    # Build regular module instances from the hardware registry - each
+    # instance's id becomes its settings-store key (see base.py), and every
+    # other field in its hardware.toml entry (driver, overrides, ...) is
+    # pure wiring, passed through as `config=` untouched.
+    for instance in instances:
+        instance_id = instance["id"]
+        module_type = instance["module"]
+        wiring = {k: v for k, v in instance.items() if k not in ("id", "module")}
+
+        module_cls = _load_module_class(module_type)
+        if module_cls is None:
             continue
 
-        # Create module instance (this is simplified - you'd need to dynamically load modules)
-        try:
-            module_class = importlib.import_module(f"alarmclock.modules.{module_name}")
-            if hasattr(module_class, module_name.capitalize()):
-                module_instance = getattr(module_class, module_name.capitalize())(
-                    name=module_name,
-                    bus=bus,
-                    config=module_config,
-                    store=settings
-                )
-                modules.append(module_instance)
-        except (ImportError, AttributeError) as e:
-            logger.warning(f"Could not load module {module_name}: {e}")
+        modules.append(module_cls(name=instance_id, bus=bus, config=wiring, store=store))
 
     # Attach context to webui controller (this gives it access to scheduler and all modules)
     webui_controller.attach_context(scheduler, modules)
@@ -82,25 +86,27 @@ async def run(demo_alarm_seconds: int | None) -> None:
         webui_controller.init()
     )
 
-    # Enable modules that should be enabled
-    # Check if modules were previously enabled (from persisted settings) or use config
+    # Enable modules whose persisted (or default) `active` setting is true.
+    # Calling enable()/disable() directly (not set_active()) since we're
+    # only reflecting the already-loaded state, not changing it - no need
+    # to re-persist what was just read.
     for module in modules:
-        # Load previous state from store or check config
-        if module.settings.get("active", True):  # Default to enabled if not specified
+        if module.settings.get("active", True):
             await module.enable()
+        else:
+            await module.disable()
 
-    # Enable webui controller (it's a core component, so it should be enabled by default)
-    if settings.get_setting("webui", None) is not None:
-        await webui_controller.enable()
-    else:
-        await webui_controller.disable()
+    # WebUI is a core component, enabled by default (see WebUIController's
+    # own `enabled = True` in __init__). Disabling it entirely for
+    # webui-less devices (D1) isn't wired up yet - tracked separately.
+    await webui_controller.enable()
 
     # Start scheduler
     await scheduler.start()
 
     # If demo alarm requested, schedule it
     if demo_alarm_seconds is not None:
-        logger.info(f"Scheduling demo alarm in {demo_alarm_seconds} seconds")
+        logger.info(f"Scheduling demo alarm in {demo_alarm_seconds} seconds", module_name="daemon")
         # Implementation for demo alarm would go here
 
     # Main loop - keep the daemon running
@@ -108,12 +114,8 @@ async def run(demo_alarm_seconds: int | None) -> None:
         while True:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
-        logger.info("Shutting down...")
-        # Cleanup tasks (this is simplified)
-        await scheduler.stop()
-        for module in modules:
-            await module.disable()
-        await webui_controller.disable()
+        # todo (already in todo.todo)
+        logger.info("Shutting down...", module_name="daemon")
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Alarm clock daemon")
@@ -133,8 +135,13 @@ def main() -> None:
 
     args = parser.parse_args()
 
-
-    asyncio.run(run(args.demo_alarm_seconds))
+    # Run the daemon with proper KeyboardInterrupt handling
+    try:
+        asyncio.run(run(args.demo_alarm_seconds))
+    except KeyboardInterrupt:
+        logger.info("Shutting down...", module_name="daemon")
+        # Let the exception propagate - it will be handled by the main event loop
+        raise
 
 
 if __name__ == "__main__":

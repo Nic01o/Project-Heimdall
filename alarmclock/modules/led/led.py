@@ -27,25 +27,14 @@ from typing import Any
 from alarmclock.modules.base import OutputModule
 from alarmclock.modules.flags import BUTTON_FLAGS
 
-DEFAULT_BLINK_INTERVAL_SECONDS = 0.3
-DEFAULT_FLASH_SECONDS = 0.15
-
-# Reaction kinds selectable per flag - "ignore" is what makes a flag opt-out,
-# everything else is a distinct light pattern.
-REACTIONS = ["ignore", "on", "off", "toggle", "flash_1", "flash_2", "flash_3", "flash_4"]
-
-# How many times to flash for each flash_N reaction.
-_FLASH_TIMES = {"flash_1": 1, "flash_2": 2, "flash_3": 3, "flash_4": 4}
-
-# Out-of-the-box behavior. Default ignore
-_DEFAULT_REACTIONS = {
-    "press":    "ignore",
-    "release":  "ignore",
-    "click":    "ignore",
-    "double_click": "ignore",
-    "multi_click": "ignore",
-    "long_press": "ignore",
-}
+from alarmclock.modules.led.default_settings import (
+    DEFAULT_BLINK_INTERVAL_SECONDS,
+    DEFAULT_FLASH_SECONDS,
+    REACTIONS,
+    _FLASH_TIMES,
+    _DEFAULT_REACTIONS,
+    DEFAULT_PIN
+)
 
 
 def _reaction_setting(flag: str) -> str:
@@ -158,7 +147,7 @@ class LEDModule(OutputModule):
 
     def get_settings_schema(self) -> dict[str, dict[str, Any]]:
         schema = dict(super().get_settings_schema())
-        schema["pin"] = {**schema["pin"], "default": 22}
+        schema["pin"] = {**schema["pin"], "default": DEFAULT_PIN}
         schema["blink_interval_seconds"] = {
             "type": "float",
             "min": 0.05,

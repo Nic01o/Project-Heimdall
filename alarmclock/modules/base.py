@@ -6,6 +6,7 @@ import abc
 import asyncio
 from typing import Any
 from alarmclock.core.logger_wrapper import logger as logger_wrapper
+from alarmclock.core.settings import SettingsStore
 
 from alarmclock.modules.settings_types import SettingsValidationError, validate_against_schema
 
@@ -19,9 +20,9 @@ class Module(abc.ABC):
 
     Config vs. state: `config` only ever carries backend/wiring concerns
     (`class` for import wiring, `enabled` as the load-time gate, `driver` for
-    mock/real hardware selection, and optionally `override_enabled`/
-    `overrides` to lock specific settings to a fixed value - see below).
-    Everything a user actually tunes (pin, port, intervals, flags, `active`,
+    mock/real hardware selection, and optionally `overrides` to lock specific
+    settings to a fixed value - see below). Everything a user actually tunes
+    (pin, port, intervals, flags, `active`,
     ...) lives in `self.settings`, seeded from each field's `"default"` in
     `get_settings_schema()` and overlaid with whatever's persisted in
     `store`. A module never reads settings out of `config` directly.
@@ -35,7 +36,7 @@ class Module(abc.ABC):
         name: str,
         bus: Any,
         config: dict[str, Any] | None = None,
-        store: Any = None,
+        store: SettingsStore | None = None,
     ) -> None:
         self.name = name
         self.bus = bus
@@ -54,24 +55,23 @@ class Module(abc.ABC):
         schema = self.get_settings_schema()
         defaults = {key: field["default"] for key, field in schema.items() if "default" in field}
 
-        persisted = self.store.get(f"modules.{name}") if self.store is not None else None
+        # `name` is this module's instance id (hardware.toml's `[[instances]]`
+        # id, e.g. "led_front") - the store key a multi-instance setup needs
+        # so two instances of the same module never collide on settings.
+        persisted = self.store.get(name) if self.store is not None else None
         known_persisted = {key: value for key, value in (persisted or {}).items() if key in schema}
         self.settings: dict[str, Any] = {**defaults, **known_persisted}
 
-        # `override_enabled` + `overrides` let a deployment's config.yaml
-        # hard-lock specific settings (e.g. "this Pi's LED really is on pin
-        # 22") - the config value wins on every boot, and the field becomes
-        # read-only in the settings UI (see `locked_fields`, enforced in
+        # `overrides` in hardware.toml's instance entry hard-locks specific
+        # settings (e.g. "this Pi's LED really is on pin 22") - the config
+        # value wins on every boot, and the field becomes read-only in the
+        # settings UI (see `locked_fields`, enforced in
         # update_settings()/set_active()).
-        override_enabled = bool(self.config.get("override_enabled"))
         overrides = self.config.get("overrides") or {}
-        if override_enabled and overrides:
+        if overrides:
             validate_against_schema(overrides, schema)
             self.settings.update(overrides)
-        self.locked_fields: frozenset[str] = frozenset(overrides) if override_enabled else frozenset()
-
-        if self.store is not None:
-            self.store.set(f"modules.{name}", self.settings)
+        self.locked_fields: frozenset[str] = frozenset(overrides)
 
     @abc.abstractmethod
     async def init(self) -> None:
@@ -142,7 +142,7 @@ class Module(abc.ABC):
                 self.needs_restart = True
         self.settings = {**self.settings, **validated}
         if self.store is not None:
-            self.store.set(f"modules.{self.name}", self.settings)
+            self.store.set(self.name, validated)
         await self.bus.emit(f"{self.name}.settings_changed", self.settings)
 
     async def set_active(self, active: bool) -> None:
@@ -155,7 +155,7 @@ class Module(abc.ABC):
             raise SettingsValidationError("'active' is locked by config")
         self.settings["active"] = active
         if self.store is not None:
-            self.store.set(f"modules.{self.name}", self.settings)
+            self.store.set(self.name, {"active": active})
         if active:
             await self.enable()
         else:
@@ -195,7 +195,7 @@ class OutputModule(Module):
     async def set_output(self, on: bool) -> None:
         await self._write(on)
         self.is_on = on
-        self.logger.debug("pin %s set to %s", self.pin, "on" if on else "off")
+        self.logger.debug("pin %s set to %s", self.pin, "on" if on else "off", module_name=self.name)
 
     async def _write(self, on: bool) -> None:
         """Actually drive the pin. Implemented by the concrete module

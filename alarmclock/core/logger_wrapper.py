@@ -75,11 +75,20 @@ class ColoredFormatter(logging.Formatter):
         # Store original levelname
         original_levelname = record.levelname
 
+        # Get module name if provided
+        module_name = getattr(record, 'module_name', '')
+
         # Set the format based on log level - include timestamp in all formats
         if self.use_colors:
-            formatter = logging.Formatter(f'%(asctime)s %(name)s {self.LEVEL_FORMATS.get(original_levelname, "%(levelname)s %(message)s")}')
+            if module_name:
+                formatter = logging.Formatter(f'%(asctime)s [{Colors.BRIGHT_WHITE}{module_name}{Colors.RESET}] {self.LEVEL_FORMATS.get(original_levelname, "%(levelname)s %(message)s")}')
+            else:
+                formatter = logging.Formatter(f'%(asctime)s {self.LEVEL_FORMATS.get(original_levelname, "%(levelname)s: %(message)s")}')
         else:
-            formatter = logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s')
+            if module_name:
+                formatter = logging.Formatter('%(asctime)s [%(module_name)s] %(levelname)s %(message)s')
+            else:
+                formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 
         # Format the record
         formatted_record = formatter.format(record)
@@ -106,25 +115,33 @@ class LoggerWrapper:
 
             self.logger.addHandler(console_handler)
 
-    def debug(self, message: str, *args, **kwargs):
+    def _log_with_module(self, level: int, message: str, *args, module_name: str = None, **kwargs):
+        """Internal method to log a message with optional module name."""
+        if module_name:
+            # Pass module_name as extra parameter so the formatter can access it
+            self.logger.log(level, message, *args, extra={'module_name': module_name}, **kwargs)
+        else:
+            self.logger.log(level, message, *args, **kwargs)
+
+    def debug(self, message: str, *args, module_name: str = None, **kwargs):
         """Log a debug message."""
-        self.logger.debug(message, *args, **kwargs)
+        self._log_with_module(logging.DEBUG, message, *args, module_name=module_name, **kwargs)
 
-    def info(self, message: str, *args, **kwargs):
+    def info(self, message: str, *args, module_name: str = None, **kwargs):
         """Log an info message."""
-        self.logger.info(message, *args, **kwargs)
+        self._log_with_module(logging.INFO, message, *args, module_name=module_name, **kwargs)
 
-    def warning(self, message: str, *args, **kwargs):
+    def warning(self, message: str, *args, module_name: str = None, **kwargs):
         """Log a warning message."""
-        self.logger.warning(message, *args, **kwargs)
+        self._log_with_module(logging.WARNING, message, *args, module_name=module_name, **kwargs)
 
-    def error(self, message: str, *args, **kwargs):
+    def error(self, message: str, *args, module_name: str = None, **kwargs):
         """Log an error message."""
-        self.logger.error(message, *args, **kwargs)
+        self._log_with_module(logging.ERROR, message, *args, module_name=module_name, **kwargs)
 
-    def critical(self, message: str, *args, **kwargs):
+    def critical(self, message: str, *args, module_name: str = None, **kwargs):
         """Log a critical message."""
-        self.logger.critical(message, *args, **kwargs)
+        self._log_with_module(logging.CRITICAL, message, *args, module_name=module_name, **kwargs)
 
     def set_level(self, level: int):
         """Set the logging level."""
