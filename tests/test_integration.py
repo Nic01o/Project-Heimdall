@@ -6,16 +6,15 @@ exactly as the daemon does, fires an alarm, and confirms the module reacts to
 """
 
 import asyncio
-
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.mymodule.mymodule import MyModule
 
 
-def test_core_to_bus_to_module_round_trip():
+def test_core_to_bus_to_module_round_trip(tmp_path):
     async def scenario():
         bus = EventBus()
-        scheduler = Scheduler(bus, timezone="UTC")
+        scheduler = Scheduler(bus, timezone="UTC", name="scheduler", settings_path=tmp_path / "settings.toml")
 
         module = MyModule("mymodule", bus, {"enabled": True})
         await module.init()
@@ -37,6 +36,6 @@ def test_core_to_bus_to_module_round_trip():
 
         assert len(action_done_events) == 1
         assert action_done_events[0] == {"status": "ok"}
-        assert scheduler.get_plan().snooze_until is None  # cleared after firing
+        assert (await scheduler.get_plan()).snooze_until is None  # cleared after firing
 
     asyncio.run(scenario())

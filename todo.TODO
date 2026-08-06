@@ -18,6 +18,8 @@
           (hardware.toml instance registry, see CONFIG_REFACTOR_PLAN.md D3)
     - [ ] jegliche erwähnug von CLI, activate() und deactivate() entfehrnen
 - [ ] repair webui
+    - [ ] better formating and other ui-elements (settings to a settings-icon)
+    - [ ] "nächster wecker ändern", muss mehr wie "wecker für morgen ändern" sein
     - [ ] declutter unused stuff in the html files
     - [x] remove "store" var from method vars, bc its a singleton and does not need passing
           -> resolved the other way: there is no singleton anymore. SettingsStore/HardwareRegistry
@@ -45,7 +47,15 @@
         -> N/A, the merge step this guarded against no longer exists; new coverage is
         tests/test_store.py + tests/test_settings.py for SettingsStore/HardwareRegistry
 
-- [ ] add logger upload to data/daemon.log
+- [x] add logger upload to data/daemon.log
+
+- [ ] rework the update_and_restart.sh script
+
+- [ ] add main-branch-cleansing pipeline
+    - [ ] reset default reactions (rework to take from file?)
+    - [ ] set drivers to real
+
+
 
 ## expansion
 
@@ -75,11 +85,18 @@
 
 - [ ] KeyboardInterrupt handling in daemon.py: When Ctrl+C is pressed during execution, the program may crash instead of shutting down gracefully. The try/except block around the main loop should catch KeyboardInterrupt but may not be working properly due to how asyncio.run() handles exceptions during initialization vs execution.
 
-- [ ] fix logger showing itself as the calling module, even if the daemon called it
+- [ ] settings.toml race condition: `Configurable.save_config()`, `Configurable._cleanup_legacy_keys()`, and `write_registry_entry()` (base.py) all read the whole settings.toml, modify one part, and write the whole file back, without any lock. Two of these running interleaved on the event loop (e.g. one module's settings save racing another module being added via the web UI) can lose whichever write finishes its read first. Fix would be a shared asyncio.Lock around all three read-modify-write paths. Known, not yet fixed (see "add module" webui work).
+
+- [x] fix logger showing itself as the calling module, even if the daemon called it
       (separate from the module_name/*args ordering bug fixed in this refactor - that one made
       positional format args silently swallowed, e.g. "webui listening on %s:%s"; this one is
       about the displayed module name itself when none is passed)
+
 - [x] fix settings and hardware_config.py loading (config refactor, see CONFIG_REFACTOR_PLAN.md)
+
+- [ ] (UI) Webui, settings, save -> Internal Server Error
+
+
 
 ## code quality and architecture
 

@@ -1,25 +1,23 @@
 {% extends "base.html" %}
 {% import "_widgets.html" as widgets %}
-{% block title %}{{ module.display_name or module.name }} settings{% endblock %}
+{% block title %}WebUI Settings{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
 <div class="card">
-<h1>{{ module.display_name or module.name }} settings
-  {{ widgets.restart_hint(module, "/modules/" ~ module.name ~ "/settings") }}
-</h1>
-<form method="post" action="/modules/{{ module.name }}/settings">
+<h1>WebUI Settings</h1>
+<form method="post" action="/settings">
   {% for key, field in schema.items() %}
     {% if key != "reactions" %}
-      {{ widgets.render_field(key, field, values.get(key), key in locked_fields) }}
+      {{ widgets.render_field(key, field, values.get(key), false) }}
     {% endif %}
   {% else %}
-    <p>This module has no configurable settings.</p>
+    <p>No configurable settings.</p>
   {% endfor %}
 
   <!-- Reactions section -->
   {% if 'reactions' in schema and schema.reactions.item_schema and schema.reactions.item_schema.properties %}
-  <h2>Reactions</h2>
+  <h2>Flag Reactions</h2>
   <table id="reactions-table" class="reactions-table">
     <thead>
       <tr>
@@ -91,7 +89,7 @@
   </table>
   {% endif %}
 
-  {% if schema %}<button type="submit">Save</button>{% endif %}
+  <button type="submit">Save</button>
 </form>
 </div>
 
@@ -99,7 +97,6 @@
 {% endblock %}
 
 {% block scripts %}
-{% if schema.color_profile is defined %}
 <script>
 (function () {
   var profileSelect = document.getElementById("field-color_profile");
@@ -107,7 +104,11 @@
   var accentStrongInput = document.getElementById("field-custom_accent_strong");
   if (!profileSelect || !accentInput || !accentStrongInput) return;
 
+  {% if 'color_profile' in schema %}
   var profiles = {{ schema.color_profile.profiles | tojson }};
+  {% else %}
+  var profiles = {};
+  {% endif %}
   var root = document.documentElement.style;
 
   function apply(accent, accentStrong) {
@@ -149,44 +150,35 @@
       return;
     }
 
-    var tableBody = document.querySelector('#reactions-table tbody');
-    var newRow = document.createElement('tr');
-    newRow.className = 'reaction-row';
+    var table = document.getElementById('reactions-table');
+    var newRow = table.insertRow(-1);
 
     // Create the new row with proper name attributes for form submission
-    var rowIndex = tableBody.querySelectorAll('.reaction-row').length;
+    var rowIndex = table.rows.length - 2; // -2 because we have header row and add-row
 
-    // Create flag cell
-    var flagCell = document.createElement('td');
+    // Create flag cell - use a simple approach without complex HTML generation
+    var flagCell = newRow.insertCell(0);
     flagCell.innerHTML = '<input type="hidden" name="reactions-' + rowIndex + '-flag" value="' + flagSelect.value + '">' +
       '<select name="reactions-' + rowIndex + '-flag-display" class="reaction-flag-display">' +
       '<option value="' + flagSelect.value + '" selected>' + flagSelect.value + '</option>' +
       '</select>';
 
     // Create reaction cell
-    var reactionCell = document.createElement('td');
+    var reactionCell = newRow.insertCell(1);
     reactionCell.innerHTML = '<select name="reactions-' + rowIndex + '-reaction" class="reaction-reaction">' +
       '<option value="' + reactionSelect.value + '" selected>' + reactionSelect.value + '</option>' +
       '</select>';
 
     // Create action cell
-    var actionCell = document.createElement('td');
+    var actionCell = newRow.insertCell(2);
     actionCell.innerHTML = '<button type="button" class="delete-row">Delete</button>';
-
-    // Add all cells to the new row
-    newRow.appendChild(flagCell);
-    newRow.appendChild(reactionCell);
-    newRow.appendChild(actionCell);
-
-    // Insert before the add-row (ghost row)
-    tableBody.insertBefore(newRow, document.getElementById('add-row'));
 
     // Reset the add row inputs
     flagSelect.value = '';
     reactionSelect.value = '';
 
     // Add event listener to new delete button
-    newRow.querySelector('.delete-row').addEventListener('click', function() {
+    actionCell.querySelector('.delete-row').addEventListener('click', function() {
       newRow.remove();
     });
   });
@@ -194,10 +186,9 @@
   // Handle deleting existing rows
   document.addEventListener('click', function(e) {
     if (e.target.classList.contains('delete-row')) {
-      e.target.closest('.reaction-row').remove();
+      e.target.closest('tr').remove();
     }
   });
 })();
 </script>
-{% endif %}
 {% endblock %}

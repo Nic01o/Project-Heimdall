@@ -3,81 +3,55 @@
 from __future__ import annotations
 import argparse
 import asyncio
-import importlib
+import tomllib
 from pathlib import Path
-from alarmclock.core.settings import HardwareRegistry, SettingsStore
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.core.webui_controller import WebUIController
-from alarmclock.modules.base import Module
+from alarmclock.modules.base import Module, available_module_types
 from alarmclock.core.logger_wrapper import logger
 
 CONFIG_DIR: Path = Path(__file__).resolve().parent.parent / "config"
-HARDWARE_PATH: Path = CONFIG_DIR / "hardware.toml"
 SETTINGS_PATH: Path = CONFIG_DIR / "settings.toml"
 
 WATCHED_EVENTS = ("alarm.triggered", "alarm.stopped", "alarm.snoozed")
 
 
-def _load_module_class(module_type: str) -> type[Module] | None:
-    """Import alarmclock.modules.<module_type>.<module_type> and return the
-    concrete Module subclass it defines, if any."""
-    try:
-        module_file = importlib.import_module(f"alarmclock.modules.{module_type}.{module_type}")
-    except ImportError as e:
-        logger.warning(f"Could not import module type {module_type!r}: {e}", module_name="daemon")
-        return None
-    for obj in vars(module_file).values():
-        if (
-            isinstance(obj, type)
-            and issubclass(obj, Module)
-            and obj is not Module
-            and obj.__module__ == module_file.__name__
-        ):
-            return obj
-    return None
-
-
 async def run(demo_alarm_seconds: int | None) -> None:
-    hardware = HardwareRegistry(HARDWARE_PATH)
-    store = SettingsStore(SETTINGS_PATH)
-    instances = hardware.instances()
+    try:
+        with open(SETTINGS_PATH, "rb") as f:
+            registry = tomllib.load(f).get("registry", {})
+    except FileNotFoundError:
+        registry = {}
 
-    logger.info(f"Loaded {len(instances)} hardware instance(s)", module_name="daemon")
+    logger.info(f"Loaded {len(registry)} hardware instance(s)", module_name="daemon")
 
-    # Setup event bus
+    module_types = available_module_types(SETTINGS_PATH)
+
     bus = EventBus()
-
-    # Setup scheduler
-    scheduler = Scheduler(bus=bus, store=store)
+    webui_controller = WebUIController(name="webui", bus=bus, settings_path=SETTINGS_PATH)
+    scheduler = Scheduler(bus=bus, name="scheduler", settings_path=SETTINGS_PATH)
+    await scheduler.load_config(scheduler.name)
 
     # Setup modules (including core webui controller)
     modules: list[Module] = []
+    for instance_id, entry in registry.items():
+        module_type = entry["module"]
+        wiring = {k: v for k, v in entry.items() if k != "module"}
 
-    # Initialize WebUI Controller directly as a core component
-    # This is the special case - webui gets direct access to scheduler and modules
-    webui_controller = WebUIController(
-        name="webui",
-        bus=bus,
-        store=store,
-    )
-
-    # Build regular module instances from the hardware registry - each
-    # instance's id becomes its settings-store key (see base.py), and every
-    # other field in its hardware.toml entry (driver, overrides, ...) is
-    # pure wiring, passed through as `config=` untouched.
-    for instance in instances:
-        instance_id = instance["id"]
-        module_type = instance["module"]
-        wiring = {k: v for k, v in instance.items() if k not in ("id", "module")}
-
-        module_cls = _load_module_class(module_type)
+        module_cls = module_types.get(module_type)
         if module_cls is None:
+            logger.warning(
+                f"instance {instance_id!r} wants module type {module_type!r}, "
+                "which isn't listed in [module_types]",
+                module_name="daemon",
+            )
             continue
 
-        modules.append(module_cls(name=instance_id, bus=bus, config=wiring, store=store))
+        module = module_cls(name=instance_id, bus=bus, config=wiring, settings_path=SETTINGS_PATH)
+        await module.load_config(instance_id)
+        modules.append(module)
 
-    # Attach context to webui controller (this gives it access to scheduler and all modules)
     webui_controller.attach_context(scheduler, modules)
 
     # Initialize all modules
@@ -85,16 +59,6 @@ async def run(demo_alarm_seconds: int | None) -> None:
         *[module.init() for module in modules],
         webui_controller.init()
     )
-
-    # Enable modules whose persisted (or default) `active` setting is true.
-    # Calling enable()/disable() directly (not set_active()) since we're
-    # only reflecting the already-loaded state, not changing it - no need
-    # to re-persist what was just read.
-    for module in modules:
-        if module.settings.get("active", True):
-            await module.enable()
-        else:
-            await module.disable()
 
     # WebUI is a core component, enabled by default (see WebUIController's
     # own `enabled = True` in __init__). Disabling it entirely for

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Neues Modul{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<div class="card">
+<h1>Neues Modul hinzufügen</h1>
+<form method="post" action="/modules/new">
+  <label class="field">
+    <span>Bezeichnung</span>
+    <input type="text" name="instance_id" required autofocus autocomplete="off"
+           placeholder="z.B. alarm_led">
+  </label>
+  <label class="field field-inline">
+    <span>Typ</span>
+    {% if module_types %}
+      <select name="module_type" required>
+        {% for key, label in module_types.items() %}
+          <option value="{{ key }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    {% else %}
+      <span>Keine Modultypen in [module_types] (config/settings.toml) verfügbar.</span>
+    {% endif %}
+  </label>
+  {% if module_types %}<button type="submit">Hinzufügen</button>{% endif %}
+</form>
+</div>
+
+<p><a href="/">&larr; back</a></p>
+{% endblock %}

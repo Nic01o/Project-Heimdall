@@ -4,7 +4,10 @@ Logger wrapper with colored and formatted output for info/debug messages.
 
 import logging
 import sys
+from pathlib import Path
 from typing import Optional
+
+LOG_FILE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "daemon.log"
 
 # ANSI color codes for formatting
 class Colors:
@@ -95,6 +98,14 @@ class ColoredFormatter(logging.Formatter):
 
         return formatted_record
 
+def _file_handler() -> logging.FileHandler:
+    """Build a FileHandler writing to LOG_FILE_PATH, without ANSI colors."""
+    LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(LOG_FILE_PATH)
+    handler.setFormatter(ColoredFormatter(use_colors=False))
+    return handler
+
+
 class LoggerWrapper:
     """Wrapper around Python's logging module with enhanced formatting."""
 
@@ -114,6 +125,7 @@ class LoggerWrapper:
             console_handler.setFormatter(formatter)
 
             self.logger.addHandler(console_handler)
+            self.logger.addHandler(_file_handler())
 
     def _log_with_module(self, level: int, message: str, *args, module_name: str = None, **kwargs):
         """Internal method to log a message with optional module name."""
@@ -181,10 +193,15 @@ def configure_external_logger(name: str, module_name: str, use_colors: bool = Tr
     external_logger = logging.getLogger(name)
     external_logger.handlers = []
     external_logger.propagate = False
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(ColoredFormatter(use_colors=use_colors))
-    handler.addFilter(_ModuleNameFilter(module_name))
-    external_logger.addHandler(handler)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(ColoredFormatter(use_colors=use_colors))
+    console_handler.addFilter(_ModuleNameFilter(module_name))
+    external_logger.addHandler(console_handler)
+
+    file_handler = _file_handler()
+    file_handler.addFilter(_ModuleNameFilter(module_name))
+    external_logger.addHandler(file_handler)
 
 
 # Global instance for convenience

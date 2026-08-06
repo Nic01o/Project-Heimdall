@@ -4,22 +4,29 @@ Hardware-independent."""
 from __future__ import annotations
 import asyncio
 import datetime
+from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
-from alarmclock.core.alarm import SleepPlan, SleepPlanGroup, Weekday
+from alarmclock.core.alarm import AlarmStatus, SleepPlan, SleepPlanGroup, Weekday
 from alarmclock.core.event_bus import EventBus
 from alarmclock.core.logger_wrapper import logger
+from alarmclock.modules.base import Configurable
 
 NowFn = Callable[[], datetime.datetime]
 
-
-class Scheduler:
+class Scheduler(Configurable):
     """Waits for the next due wake-up and emits `alarm.triggered` on the bus.
 
     Knows nothing about hardware. The clock (`now`) is injectable so the
-    scheduling logic can be unit-tested without waiting on real time. If a
-    `store` is given, the plan is persisted under the "sleep_plan" key on
-    every change and restored from it at construction time.
+    scheduling logic can be unit-tested without waiting on real time.
+
+    Persists the sleep plan the same way a Module persists its settings: as
+    a Configurable, under `[settings.<name>]` in settings.toml, with
+    `get_settings_schema()` describing the same fields `SleepPlan.to_dict()`
+    produces (see `alarmclock.core.alarm`) - `load_config`/`save_config`
+    round-trip that dict directly. The owner (daemon.py) must
+    `await scheduler.load_config(scheduler.name)` once after construction,
+    exactly like it does for every other module.
     """
 
     def __init__(
@@ -27,33 +34,37 @@ class Scheduler:
         bus: EventBus,
         timezone: str = "UTC",
         *,
+        name: str,
+        settings_path: Path | None = None,
         now: NowFn | None = None,
-        store: Any | None = None,
     ) -> None:
-        self.bus = bus
+        super().__init__(name, bus, settings_path=settings_path)
         self.tz = ZoneInfo(timezone)
         self._now = now or (lambda: datetime.datetime.now(self.tz))
-        self._store = store
         self._plan = SleepPlan()
         self._task: asyncio.Task[None] | None = None
         self._changed = asyncio.Event()
 
-        if self._store is not None:
-            data = self._store.get("sleep_plan")
-            if data is not None:
-                self._plan = SleepPlan.from_dict(data)
-        self._prune_stale_overrides()
+    def get_settings_schema(self) -> dict[str, dict[str, Any]]:
+        return {
+            "enabled": {"type": "bool", "default": True, "label": "Wecker aktiv"},
+            "groups": {"type": "list", "default": [], "label": "Wochenplan-Gruppen"},
+            "overrides": {"type": "list", "default": {}, "label": "Einmalige Ausnahmen"},
+            "snooze_until": {"type": "string", "default": "", "label": "Schlummern bis"},
+        }
 
-    # -- persistence ---------------------------------------------------------
+    async def load_config(self, instance_name: str) -> None:
+        await super().load_config(instance_name)
+        self._plan = SleepPlan.from_dict(self._instance_config)
+        await self._prune_stale_overrides()
 
-    def _persist(self) -> None:
-        if self._store is not None:
-            self._store.set("sleep_plan", self._plan.to_dict())
+    async def _persist(self) -> None:
+        await self.save_config(self.name, self._plan.to_dict())
 
     # -- plan access -----------------------------------------------------------
 
-    def get_plan(self) -> SleepPlan:
-        self._prune_stale_overrides()
+    async def get_plan(self) -> SleepPlan:
+        await self._prune_stale_overrides()
         return self._plan
 
     def is_day_assigned(self, day: Weekday) -> bool:
@@ -71,14 +82,29 @@ class Scheduler:
                 return group
         raise ValueError(f"unknown sleep plan group {group_id!r}")
 
-    def _assigned_days(self) -> set[Weekday]:
-        """Days claimed by currently *enabled* groups. A disabled (hidden)
-        group's days are released so another group can claim them."""
-        assigned: set[Weekday] = set()
+    def day_owner(self) -> dict[Weekday, str]:
+        """Weekday -> id of the enabled group currently claiming it. A
+        disabled (hidden) group's days aren't in here - they're released so
+        another group can claim them."""
+        owner: dict[Weekday, str] = {}
         for group in self._plan.groups:
-            if group.enabled:
-                assigned |= group.days
-        return assigned
+            if not group.enabled:
+                continue
+            for day in group.days:
+                owner[day] = group.id
+        return owner
+
+    def _assigned_days(self) -> set[Weekday]:
+        return set(self.day_owner())
+
+    def blocking_days(self, group: SleepPlanGroup) -> list[Weekday]:
+        """Days of a disabled `group` now owned by another enabled group, in
+        weekday order - the reason it can't be re-enabled yet. Empty for an
+        already-enabled group."""
+        if group.enabled:
+            return []
+        owner = self.day_owner()
+        return sorted(group.days & owner.keys(), key=lambda d: d.value)
 
     def _next_date_for_weekday(
         self, day: Weekday, after: datetime.datetime, reference_time: datetime.time | None
@@ -103,7 +129,7 @@ class Scheduler:
 
     # -- plan management --------------------------------------------------
 
-    def create_group(self, days: frozenset[Weekday], time: datetime.time) -> SleepPlanGroup:
+    async def create_group(self, days: frozenset[Weekday], time: datetime.time) -> SleepPlanGroup:
         already_taken = days & self._assigned_days()
         if already_taken:
             names = ", ".join(day.name.capitalize() for day in sorted(already_taken))
@@ -112,10 +138,10 @@ class Scheduler:
         self._plan.groups.append(group)
         self._plan.enabled = True
         self._changed.set()
-        self._persist()
+        await self._persist()
         return group
 
-    def set_group_time(self, group_id: str, time: datetime.time, *, permanent: bool) -> None:
+    async def set_group_time(self, group_id: str, time: datetime.time, *, permanent: bool) -> None:
         group = self._find_group(group_id)
         if permanent:
             group.time = time
@@ -128,9 +154,9 @@ class Scheduler:
             self._plan.overrides[target_date] = time
         self._plan.enabled = True
         self._changed.set()
-        self._persist()
+        await self._persist()
 
-    def update_group(self, group_id: str, days: frozenset[Weekday], time: datetime.time) -> None:
+    async def update_group(self, group_id: str, days: frozenset[Weekday], time: datetime.time) -> None:
         """Permanently replace a group's weekdays and time (used by the
         edit-in-place row in the UI). Days already owned by this same group
         are exempt from the conflict check."""
@@ -144,9 +170,9 @@ class Scheduler:
         group.days = frozenset(days)
         group.time = time
         self._changed.set()
-        self._persist()
+        await self._persist()
 
-    def set_group_enabled(self, group_id: str, enabled: bool) -> None:
+    async def set_group_enabled(self, group_id: str, enabled: bool) -> None:
         """Pause or resume a single group without deleting it or releasing
         its weekdays. Disabling a group frees its weekdays for other groups;
         re-enabling it re-claims them, so it is rejected if another enabled
@@ -159,20 +185,20 @@ class Scheduler:
                 raise ValueError(f"already assigned to a sleep plan: {names}")
         group.enabled = enabled
         self._changed.set()
-        self._persist()
+        await self._persist()
 
-    def toggle_group_enabled(self, group_id: str) -> bool:
+    async def toggle_group_enabled(self, group_id: str) -> bool:
         group = self._find_group(group_id)
-        self.set_group_enabled(group_id, not group.enabled)
+        await self.set_group_enabled(group_id, not group.enabled)
         return group.enabled
 
-    def delete_group(self, group_id: str) -> None:
+    async def delete_group(self, group_id: str) -> None:
         group = self._find_group(group_id)
         self._plan.groups.remove(group)
         self._changed.set()
-        self._persist()
+        await self._persist()
 
-    def set_day_once(self, day: Weekday, time: datetime.time | None) -> None:
+    async def set_day_once(self, day: Weekday, time: datetime.time | None) -> None:
         """Set (or clear) a one-time exception for a currently unassigned
         weekday, without creating a permanent group."""
         now = self._now()
@@ -181,12 +207,12 @@ class Scheduler:
         self._plan.overrides[target_date] = time
         self._plan.enabled = True
         self._changed.set()
-        self._persist()
+        await self._persist()
 
-    def set_enabled(self, enabled: bool) -> None:
+    async def set_enabled(self, enabled: bool) -> None:
         self._plan.enabled = enabled
         self._changed.set()
-        self._persist()
+        await self._persist()
 
     # -- master toggle / "next alarm" override -----------------------------
     # The web UI's top-level toggle only ever acts on *one* occurrence: the
@@ -228,7 +254,35 @@ class Scheduler:
             and self._plan.overrides[reference] is None
         )
 
-    def skip_next_alarm(self, now: datetime.datetime | None = None) -> bool:
+    def get_alarm_status(self, now: datetime.datetime | None = None) -> AlarmStatus:
+        """Bundle the reference date, its skip/override state, which group
+        it belongs to, and the actual next trigger - everything the web
+        UI's index page needs about "what's the next alarm doing"."""
+        now = now or self._now()
+        plan = self._plan
+        reference_date = self.get_alarm_reference_date(now)
+        is_skipped = self.is_next_alarm_skipped(now)
+
+        override_time: datetime.time | None = None
+        if reference_date is not None and not is_skipped and reference_date in plan.overrides:
+            override_time = plan.overrides[reference_date]
+
+        affected_group_id: str | None = None
+        if reference_date is not None:
+            affected_weekday = Weekday(reference_date.weekday())
+            affected_group_id = next(
+                (
+                    group.id
+                    for group in plan.groups
+                    if group.enabled and affected_weekday in group.days
+                ),
+                None,
+            )
+
+        trigger = self.next_trigger(plan, now)
+        return AlarmStatus(reference_date, is_skipped, override_time, affected_group_id, trigger)
+
+    async def skip_next_alarm(self, now: datetime.datetime | None = None) -> bool:
         """Skip the single next occurrence. Returns False (no-op) if there's
         nothing scheduled to skip."""
         now = now or self._now()
@@ -237,10 +291,10 @@ class Scheduler:
             return False
         self._plan.overrides[reference] = None
         self._changed.set()
-        self._persist()
+        await self._persist()
         return True
 
-    def clear_alarm_override(self, now: datetime.datetime | None = None) -> bool:
+    async def clear_alarm_override(self, now: datetime.datetime | None = None) -> bool:
         """Clear whatever override (skip or retimed) currently sits on the
         reference date, reverting to the plain recurring schedule."""
         now = now or self._now()
@@ -249,10 +303,10 @@ class Scheduler:
             return False
         del self._plan.overrides[reference]
         self._changed.set()
-        self._persist()
+        await self._persist()
         return True
 
-    def override_next_alarm_time(
+    async def override_next_alarm_time(
         self, time: datetime.time, now: datetime.datetime | None = None
     ) -> datetime.date:
         """Replace the next occurrence's time for this one instance only.
@@ -266,7 +320,7 @@ class Scheduler:
             reference = now.date() if candidate > now else now.date() + datetime.timedelta(days=1)
         self._plan.overrides[reference] = time
         self._changed.set()
-        self._persist()
+        await self._persist()
         return reference
 
     # -- trigger computation (pure, unit-testable) -------------------------
@@ -301,17 +355,17 @@ class Scheduler:
         ]
         return min(candidates) if candidates else None
 
-    def _prune_stale_overrides(self) -> None:
+    async def _prune_stale_overrides(self) -> None:
         today = self._now().date()
         stale = [date for date in self._plan.overrides if date < today]
         if not stale:
             return
         for date in stale:
             del self._plan.overrides[date]
-        self._persist()
+        await self._persist()
 
-    def _next_due(self) -> datetime.datetime | None:
-        self._prune_stale_overrides()
+    async def _next_due(self) -> datetime.datetime | None:
+        await self._prune_stale_overrides()
         return self.next_trigger(self._plan, self._now())
 
     # -- run loop ------------------------------------------------------------
@@ -333,7 +387,7 @@ class Scheduler:
     async def _run(self) -> None:
         while True:
             self._changed.clear()
-            trigger = self._next_due()
+            trigger = await self._next_due()
             if trigger is None:
                 await self._changed.wait()
                 continue
@@ -355,7 +409,7 @@ class Scheduler:
             del self._plan.overrides[trigger.date()]
         else:
             source = "plan"
-        self._persist()
+        await self._persist()
         await self.bus.emit(
             "alarm.triggered",
             {"date": trigger.date().isoformat(), "time": trigger.time().isoformat(), "source": source},
@@ -370,7 +424,7 @@ class Scheduler:
         if self._plan.snooze_until is not None:
             self._plan.snooze_until = None
             self._changed.set()
-            self._persist()
+            await self._persist()
         await self.bus.emit("alarm.stopped", {})
 
     async def snooze_alarm(self, minutes: float = 9) -> datetime.datetime:
@@ -378,7 +432,7 @@ class Scheduler:
         snoozed_until = self._now() + datetime.timedelta(minutes=minutes)
         self._plan.snooze_until = snoozed_until
         self._changed.set()
-        self._persist()
+        await self._persist()
         await self.bus.emit(
             "alarm.snoozed", {"minutes": minutes, "until": snoozed_until.isoformat()}
         )

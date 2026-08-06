@@ -9,9 +9,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
+from alarmclock.core.event_bus import EventBus
 from alarmclock.core.webui_controller import WebUIController
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.base import Module
+from alarmclock.modules.settings_types import SettingsValidationError
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cwd(tmp_path, monkeypatch):
+    """WebUIController falls back to the relative path "config/settings.toml"
+    when no settings_path is given. Run every test from a scratch directory
+    so a test that persists settings (update_settings, set_active, the
+    "add module" flow, ...) can't write into the real repo's config file."""
+    (tmp_path / "config").mkdir()
+    monkeypatch.chdir(tmp_path)
 
 
 class MockEventBus:
@@ -99,6 +111,7 @@ def test_get_settings_schema():
     # Check that all expected fields are present
     assert "host" in schema
     assert "port" in schema
+    assert "timezone" in schema
     assert "password" in schema
     assert "color_profile" in schema
     assert "custom_accent" in schema
@@ -107,6 +120,8 @@ def test_get_settings_schema():
     # Check default values
     assert schema["host"]["default"] == "0.0.0.0"
     assert schema["port"]["default"] == 5000
+    assert schema["timezone"]["default"] == "UTC"
+    assert "Europe/Berlin" in schema["timezone"]["options"]
     assert schema["password"]["default"] == ""
     assert schema["color_profile"]["default"] == "sunrise"
     assert schema["custom_accent"]["default"] == "#000000"
@@ -226,6 +241,25 @@ def test_update_settings():
     assert controller.settings["port"] == 8080
 
 
+def test_update_settings_timezone_valid():
+    """A configured timezone option is accepted and persisted."""
+    bus = MockEventBus()
+    controller = WebUIController(name="webui", bus=bus)
+
+    asyncio.run(controller.update_settings({"timezone": "Europe/Berlin"}))
+
+    assert controller.settings["timezone"] == "Europe/Berlin"
+
+
+def test_update_settings_timezone_invalid():
+    """A timezone outside the curated options list is rejected."""
+    bus = MockEventBus()
+    controller = WebUIController(name="webui", bus=bus)
+
+    with pytest.raises(SettingsValidationError):
+        asyncio.run(controller.update_settings({"timezone": "Mars/Olympus_Mons"}))
+
+
 def test_init():
     """Test init method."""
     bus = MockEventBus()
@@ -276,6 +310,103 @@ def test_safe_next():
 
     # Paths starting with // should be normalized to "/"
     assert _safe_next("//test") == "/"
+
+
+@pytest.fixture
+def new_module_settings_path(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text(
+        "[module_types]\n"
+        'mymodule = "alarmclock.modules.mymodule.mymodule"\n'
+        "\n"
+        "[registry]\n"
+    )
+    return path
+
+
+@pytest.fixture
+def new_module_controller(new_module_settings_path, mock_scheduler):
+    controller = WebUIController(
+        name="webui", bus=EventBus(), settings_path=new_module_settings_path
+    )
+    controller.attach_context(mock_scheduler, [])
+    return controller
+
+
+def test_get_modules_new_lists_available_types(new_module_controller):
+    client = TestClient(new_module_controller.app)
+
+    response = client.get("/modules/new")
+
+    assert response.status_code == 200
+    assert "mymodule" in response.text
+
+
+def test_post_modules_new_creates_and_activates_instance(new_module_controller, new_module_settings_path):
+    client = TestClient(new_module_controller.app)
+
+    response = client.post(
+        "/modules/new",
+        data={"instance_id": "my_test", "module_type": "mymodule"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/modules/my_test/settings"
+    assert "my_test" in new_module_controller._modules
+    module = new_module_controller._modules["my_test"]
+    assert module.enabled is True
+
+    import tomllib
+    with open(new_module_settings_path, "rb") as f:
+        data = tomllib.load(f)
+    assert data["registry"]["my_test"] == {"module": "mymodule"}
+
+
+def test_post_modules_new_rejects_duplicate_name(new_module_controller):
+    client = TestClient(new_module_controller.app)
+    client.post(
+        "/modules/new", data={"instance_id": "my_test", "module_type": "mymodule"}
+    )
+
+    response = client.post(
+        "/modules/new",
+        data={"instance_id": "my_test", "module_type": "mymodule"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "error" in response.headers["location"]
+    # Still only the one instance from the first request.
+    assert len(new_module_controller._modules) == 1
+
+
+def test_post_modules_new_rejects_unknown_type(new_module_controller):
+    client = TestClient(new_module_controller.app)
+
+    response = client.post(
+        "/modules/new",
+        data={"instance_id": "my_test", "module_type": "does_not_exist"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "error" in response.headers["location"]
+    assert "my_test" not in new_module_controller._modules
+
+
+def test_post_modules_new_rejects_invalid_instance_id(new_module_controller):
+    client = TestClient(new_module_controller.app)
+
+    response = client.post(
+        "/modules/new",
+        data={"instance_id": "not a valid id!", "module_type": "mymodule"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "error" in response.headers["location"]
+    assert new_module_controller._modules == {}
 
 
 if __name__ == "__main__":

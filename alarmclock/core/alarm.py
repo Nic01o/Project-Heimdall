@@ -105,3 +105,16 @@ class SleepPlan:
                 else None
             ),
         )
+
+
+@dataclasses.dataclass
+class AlarmStatus:
+    """Snapshot of "what's the next alarm doing right now" - the domain
+    facts the web UI's index page needs, computed once so callers don't
+    each re-derive reference dates and group ownership themselves."""
+
+    reference_date: datetime.date | None
+    is_skipped: bool
+    override_time: datetime.time | None
+    affected_group_id: str | None
+    trigger: datetime.datetime | None

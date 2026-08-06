@@ -4,14 +4,300 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import importlib
+import tomllib
+import tomli_w
+from pathlib import Path
 from typing import Any
 from alarmclock.core.logger_wrapper import logger as logger_wrapper
-from alarmclock.core.settings import SettingsStore
-
+from alarmclock.modules.flags import FLAG_SOURCES, resolve_flag
 from alarmclock.modules.settings_types import SettingsValidationError, validate_against_schema
 
 
-class Module(abc.ABC):
+class Configurable:
+    """Base class for all configurable modules.
+
+    This class handles loading configuration from the unified settings.toml file,
+    which contains both registry (hardware configs) and settings (overrides).
+    It manages merging, type validation and legacy key cleanup.
+    """
+
+    def __init__(self, name: str, bus, config: dict[str, Any] | None = None, settings_path: Path | None = None) -> None:
+        self.name = name
+        self.bus = bus
+        self.config = config or {}
+        self._settings_path = settings_path or Path("config/settings.toml")
+        # For now, keep a copy of the current configuration
+        self._instance_config: dict[str, Any] = {}
+        # Initialize with default settings (including schema defaults) to ensure tests still work
+        self.settings: dict[str, Any] = self._get_default_settings()
+        # Fields whose value comes from [registry.<name>] (hardware wiring) -
+        # populated by load_config(); read-only in the settings UI, enforced
+        # in Module.update_settings()/set_active().
+        self.locked_fields: frozenset[str] = frozenset()
+
+    def _get_default_settings(self) -> dict[str, Any]:
+        """Get default settings with schema values populated."""
+        schema = self.get_settings_schema()
+        defaults = {}
+        for key, value in schema.items():
+            if "default" in value:
+                defaults[key] = value["default"]
+        return defaults
+
+    async def load_config(self, instance_name: str) -> None:
+        """Load configuration from settings.toml and merge with schema defaults.
+
+        This method reads the registry and settings sections for the given instance,
+        merges them, validates types against the module's schema, and performs
+        cleanup of legacy keys (removing outdated ones from the file).
+
+        Args:
+            instance_name: The name of the instance to load configuration for.
+        """
+        # Read the entire settings.toml
+        try:
+            with open(self._settings_path, "rb") as f:
+                settings_data = tomllib.load(f)
+        except FileNotFoundError:
+            # If no settings file exists, start fresh
+            settings_data = {}
+
+        # Ensure sections exist
+        if "registry" not in settings_data:
+            settings_data["registry"] = {}
+        if "settings" not in settings_data:
+            settings_data["settings"] = {}
+
+        # Get registry data for this instance (hardware info)
+        registry_instance = settings_data["registry"].get(instance_name, {})
+
+        # Get override values for this instance
+        overrides = settings_data["settings"].get(instance_name, {})
+
+        # Hardware wiring from the registry always wins over the settings UI -
+        # "module" itself isn't a settings field, so it's excluded here.
+        self.locked_fields = frozenset(k for k in registry_instance if k != "module")
+
+        # Merge defaults (schema) with registry data and overrides
+        merged_config = self._merge_schema_with_data(registry_instance, overrides)
+
+        # Update instance config
+        self._instance_config = merged_config
+
+        # Apply the merged config to self.config for compatibility with base class
+        self.config = merged_config
+
+        # Update self.settings as expected by legacy code (e.g. in test)
+        # This must be done AFTER config is updated so settings are consistent
+        self.settings = merged_config.copy()
+
+        # Bring the settings file in line with the current schema: drop keys
+        # the schema no longer defines, then backfill schema defaults that
+        # aren't yet covered by either a registry wiring value or a
+        # persisted override - so a fresh install or a newly added schema
+        # field shows up in settings.toml instead of only existing
+        # implicitly in memory. Registry-sourced keys are deliberately
+        # excluded here: settings.<name> overrides win over registry on the
+        # next load (see _merge_schema_with_data), so mirroring a wiring
+        # value into settings would let it silently shadow future registry
+        # edits.
+        schema = self.get_settings_schema()
+        if schema:
+            self._cleanup_legacy_keys(instance_name, set(schema.keys()))
+            missing_defaults = {
+                key: field["default"]
+                for key, field in schema.items()
+                if "default" in field and key not in registry_instance and key not in overrides
+            }
+            if missing_defaults:
+                await self.save_config(instance_name, missing_defaults)
+
+    async def save_config(self, instance_name: str, updates: dict[str, Any]) -> None:
+        """Save configuration changes to settings.toml.
+
+        Only the [settings.<instance_name>] section is modified. The [registry]
+        section is left untouched.
+
+        Args:
+            instance_name: The name of the instance to update.
+            updates: Dictionary containing the configuration changes to save.
+        """
+        # Read the entire settings.toml
+        try:
+            with open(self._settings_path, "rb") as f:
+                settings_data = tomllib.load(f)
+        except FileNotFoundError:
+            # If no settings file exists, start fresh
+            settings_data = {"registry": {}, "settings": {}}
+
+        # Ensure sections exist
+        if "registry" not in settings_data:
+            settings_data["registry"] = {}
+        if "settings" not in settings_data:
+            settings_data["settings"] = {}
+
+        # Update the settings section for this instance
+        if instance_name not in settings_data["settings"]:
+            settings_data["settings"][instance_name] = {}
+
+        # Apply updates
+        for key, value in updates.items():
+            settings_data["settings"][instance_name][key] = value
+
+        # Write back to file atomically
+        tmp_path = self._settings_path.with_suffix(self._settings_path.suffix + ".tmp")
+        with open(tmp_path, "wb") as f:
+            tomli_w.dump(settings_data, f)
+        tmp_path.replace(self._settings_path)
+
+    def _merge_schema_with_data(self, registry_data: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+        """Merge schema defaults with registry data and override values.
+
+        Args:
+            registry_data: Hardware configuration from [registry][instance_name].
+            overrides: Module-specific overrides from [settings][instance_name].
+
+        Returns:
+            Merged configuration dictionary.
+        """
+        schema = self.get_settings_schema()
+        if not schema:
+            # If no schema is defined, fall back to a simple merge
+            result = registry_data.copy()
+            result.update(overrides)
+            return result
+
+        # Start with defaults from schema
+        result = {}
+        for key, value in schema.items():
+            default_value = value.get("default")
+            if default_value is not None:
+                result[key] = default_value
+
+        # Update with registry data (hardware wiring)
+        result.update(registry_data)
+
+        # Update with overrides (user settings)
+        result.update(overrides)
+
+        return result
+
+    def _cleanup_legacy_keys(self, instance_name: str, valid_schema_keys: set[str]) -> None:
+        """Remove outdated keys from the settings file that are no longer in the schema.
+
+        This ensures the configuration file doesn't accumulate cruft over time.
+
+        Args:
+            instance_name: The name of the instance to clean up.
+            valid_schema_keys: Set of currently valid setting keys based on schema.
+        """
+        try:
+            with open(self._settings_path, "rb") as f:
+                settings_data = tomllib.load(f)
+        except FileNotFoundError:
+            # No file means no legacy keys to clean
+            return
+
+        # Ensure settings section exists
+        if "settings" not in settings_data:
+            return
+
+        if instance_name not in settings_data["settings"]:
+            return
+
+        # Get current config for this instance
+        current_config = settings_data["settings"][instance_name]
+
+        # Identify keys that are no longer valid
+        legacy_keys = set(current_config.keys()) - valid_schema_keys
+
+        # If there are legacy keys, remove them from the file
+        if legacy_keys:
+            for key in legacy_keys:
+                del current_config[key]
+
+            # Write back to file atomically (only if changes were made)
+            tmp_path = self._settings_path.with_suffix(self._settings_path.suffix + ".tmp")
+            with open(tmp_path, "wb") as f:
+                tomli_w.dump(settings_data, f)
+            tmp_path.replace(self._settings_path)
+
+    def get_instance_config(self) -> dict[str, Any]:
+        """Get the instance configuration (merged registry + overrides).
+
+        Returns:
+            The merged configuration dictionary.
+        """
+        return self._instance_config.copy()
+
+
+def _read_toml(settings_path: Path) -> dict[str, Any]:
+    try:
+        with open(settings_path, "rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def available_module_types(settings_path: Path) -> dict[str, type["Module"]]:
+    """Import and return every module type listed in `[module_types]` of
+    settings.toml, e.g. `led = "alarmclock.modules.led.led"`. A module type
+    only becomes selectable (in the daemon's registry loading and the web
+    UI's "add module" form) once it has a line here - having source files
+    under alarmclock/modules/ is not enough by itself, so a module can be
+    developed and merged without being exposed yet. A listed path that
+    fails to import, or doesn't define exactly one Module subclass, is
+    skipped with a warning rather than raising - one broken/half-finished
+    module type shouldn't take the whole list down."""
+    settings_data = _read_toml(settings_path)
+    types: dict[str, type[Module]] = {}
+    for type_name, dotted_path in settings_data.get("module_types", {}).items():
+        try:
+            module_file = importlib.import_module(dotted_path)
+        except ImportError as exc:
+            logger_wrapper.warning(
+                f"module type {type_name!r} ({dotted_path}) failed to import: {exc}",
+                module_name="module_types",
+            )
+            continue
+        for obj in vars(module_file).values():
+            if (
+                isinstance(obj, type)
+                and issubclass(obj, Module)
+                and obj is not Module
+                and obj.__module__ == module_file.__name__
+            ):
+                types[type_name] = obj
+                break
+    return types
+
+
+def write_registry_entry(settings_path: Path, instance_id: str, module_type: str) -> None:
+    """Add a new `[registry.<instance_id>]` entry wiring `instance_id` to
+    `module_type`. Used by the web UI's "add module" flow - hand-editing
+    stays the fallback, this is just the same file written programmatically.
+    Raises ValueError if `instance_id` is already registered.
+
+    Read-modify-write against the whole file, same as Configurable.save_config()
+    - not safe against a concurrent writer, see todo.TODO's "settings.toml
+    race condition" entry."""
+    settings_data = _read_toml(settings_path)
+    settings_data.setdefault("registry", {})
+    settings_data.setdefault("settings", {})
+
+    if instance_id in settings_data["registry"]:
+        raise ValueError(f"instance {instance_id!r} already exists")
+
+    settings_data["registry"][instance_id] = {"module": module_type}
+
+    tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
+    with open(tmp_path, "wb") as f:
+        tomli_w.dump(settings_data, f)
+    tmp_path.replace(settings_path)
+
+
+class Module(Configurable):
     """Base class for all modules (plugins).
 
     Modules only communicate through the event bus - never directly with
@@ -26,6 +312,11 @@ class Module(abc.ABC):
     ...) lives in `self.settings`, seeded from each field's `"default"` in
     `get_settings_schema()` and overlaid with whatever's persisted in
     `store`. A module never reads settings out of `config` directly.
+
+    Note: This class is now based on Configurable, which loads configuration
+    from a unified settings.toml. The 'store' parameter is still accepted for
+    backwards compatibility but will be ignored as configuration is now handled
+    by the Configurable base class.
     """
 
     display_name: str | None = None
@@ -36,12 +327,14 @@ class Module(abc.ABC):
         name: str,
         bus: Any,
         config: dict[str, Any] | None = None,
-        store: SettingsStore | None = None,
+        settings_path: Path | None = None,
     ) -> None:
+        # Call parent __init__ with all necessary parameters
+        super().__init__(name, bus, config, settings_path)
+
         self.name = name
         self.bus = bus
         self.config = config or {}
-        self.store = store
         self.enabled = False
         # Set by update_settings() when a schema field flagged
         # `requires_restart: True` actually changes value. A subclass's
@@ -52,26 +345,8 @@ class Module(abc.ABC):
         self.needs_restart = False
         self.logger = logger_wrapper
 
-        schema = self.get_settings_schema()
-        defaults = {key: field["default"] for key, field in schema.items() if "default" in field}
-
-        # `name` is this module's instance id (hardware.toml's `[[instances]]`
-        # id, e.g. "led_front") - the store key a multi-instance setup needs
-        # so two instances of the same module never collide on settings.
-        persisted = self.store.get(name) if self.store is not None else None
-        known_persisted = {key: value for key, value in (persisted or {}).items() if key in schema}
-        self.settings: dict[str, Any] = {**defaults, **known_persisted}
-
-        # `overrides` in hardware.toml's instance entry hard-locks specific
-        # settings (e.g. "this Pi's LED really is on pin 22") - the config
-        # value wins on every boot, and the field becomes read-only in the
-        # settings UI (see `locked_fields`, enforced in
-        # update_settings()/set_active()).
-        overrides = self.config.get("overrides") or {}
-        if overrides:
-            validate_against_schema(overrides, schema)
-            self.settings.update(overrides)
-        self.locked_fields: frozenset[str] = frozenset(overrides)
+        # The configuration loading now happens through Configurable.load_config()
+        # This method is called from the daemon (or module-specific code) after initialization
 
     @abc.abstractmethod
     async def init(self) -> None:
@@ -141,8 +416,7 @@ class Module(abc.ABC):
             if schema[key].get("requires_restart") and self.settings.get(key) != new_value:
                 self.needs_restart = True
         self.settings = {**self.settings, **validated}
-        if self.store is not None:
-            self.store.set(self.name, validated)
+        await self.save_config(self.name, validated)
         await self.bus.emit(f"{self.name}.settings_changed", self.settings)
 
     async def set_active(self, active: bool) -> None:
@@ -154,8 +428,8 @@ class Module(abc.ABC):
         if "active" in self.locked_fields:
             raise SettingsValidationError("'active' is locked by config")
         self.settings["active"] = active
-        if self.store is not None:
-            self.store.set(self.name, {"active": active})
+        await self.save_config(self.name, {"active": active})
+        await self.bus.emit(f"{self.name}.settings_changed", self.settings)
         if active:
             await self.enable()
         else:
@@ -168,18 +442,40 @@ class Module(abc.ABC):
         await self.disable()
         await self.enable()
 
-
 class OutputModule(Module):
     """Base for modules that drive a single GPIO pin as a simple on/off
     output (a buzzer/speaker relay, a light relay, ...). Adds a shared `pin`
-    setting and a `set_output()`/`_write()` seam so mock vs. real hardware
-    only differs in how the write happens - `init()`/`on_event()` (what
-    triggers the output) stay module-specific and still need implementing.
+    setting, a `set_output()`/`_write()` seam so mock vs. real hardware only
+    differs in how the write happens, and a generic `reaction_<flag>`
+    mechanism: every flag in `alarmclock.modules.flags.FLAG_SOURCES` gets a
+    configurable reaction (see `reactions`) - `init()` (what actually drives
+    the output) stays module-specific and still needs implementing, but
+    "which flags does this module react to, and how" is handled here for
+    every subclass.
+
+    Subclasses that want different out-of-the-box behavior than "ignore"
+    for a given flag (e.g. the LED blinking on `alarm_triggered` by default)
+    override the `default_reactions` class attribute. Subclasses whose
+    hardware supports more than a plain on/off (e.g. the LED's flash
+    patterns) extend the `reactions` class attribute with their own values -
+    the base set here is deliberately the lowest common denominator so it
+    stays meaningful for any binary output (a speaker, a relay, ...).
     """
+
+    #
+    reactions: list[str] = ["ignore",]
+    default_reactions: dict[str, str] = {}
 
     def get_settings_schema(self) -> dict[str, dict[str, Any]]:
         schema = dict(super().get_settings_schema())
         schema.setdefault("pin", {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"})
+        for flag in FLAG_SOURCES:
+            schema[f"reaction_{flag}"] = {
+                "type": "select",
+                "options": self.reactions,
+                "default": self.default_reactions.get(flag, "ignore"),
+                "label": f"Reaction: {flag}",
+            }
         return schema
 
     @property
@@ -191,6 +487,11 @@ class OutputModule(Module):
     # to what they last asked for, without either driver needing a read-back
     # capability (RealLEDDriver's GPIO.output is write-only).
     is_on: bool = False
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # Pass kwargs through to Configurable.__init__
+        super().__init__(*args, **kwargs)
+        self._blink_task: asyncio.Task[None] | None = None
 
     async def set_output(self, on: bool) -> None:
         await self._write(on)
@@ -206,9 +507,9 @@ class OutputModule(Module):
         self.enabled = True
 
     async def disable(self) -> None:
+        await self._stop_blinking()
         await self.set_output(False)
         self.enabled = False
-
 
 class InputModule(Module):
     """Base for modules that read a single GPIO pin as input (a button, a
@@ -220,16 +521,23 @@ class InputModule(Module):
 
     poll_interval: float = 0.05
 
+    def get_settings_schema(self) -> dict[str, dict[str, Any]]:
+        schema = dict(super().get_settings_schema())
+        schema.setdefault("pin", {"type": "int", "min": 0, "max": 40, "label": "GPIO Pin"})
+        return schema
+
+    @property
+    def pin(self) -> int:
+        return self.settings["pin"]
+
     def __init__(
         self,
         name: str,
         bus: Any,
         config: dict[str, Any] | None = None,
-        store: Any = None,
+        settings_path: Path | None = None,
     ) -> None:
-        super().__init__(name, bus, config, store)
-        self._poll_task: asyncio.Task[None] | None = None
-        self._last_state = False
+        super().__init__(name, bus, config, settings_path)
 
     def get_settings_schema(self) -> dict[str, dict[str, Any]]:
         schema = dict(super().get_settings_schema())

@@ -8,6 +8,7 @@ is a deliberate design choice since it's a core system component.
 from __future__ import annotations
 import asyncio
 import datetime
+import re
 import secrets
 from pathlib import Path
 from typing import Any
@@ -20,10 +21,10 @@ from pydantic import BaseModel
 from starlette.datastructures import FormData
 from alarmclock.core.alarm import Weekday
 from alarmclock.core.scheduler import Scheduler
-from alarmclock.core.settings import SettingsStore
-from alarmclock.modules.base import Module
+from alarmclock.modules.base import Module, Configurable, available_module_types, write_registry_entry
 from alarmclock.modules.settings_types import (
     FIELD_TYPES,
+    TIMEZONES,
     SettingsValidationError,
     validate_against_schema,
 )
@@ -90,6 +91,25 @@ def _form_to_settings(form: FormData, schema: dict[str, dict[str, Any]]) -> dict
         elif field_type == "multiselect":
             if key in form:
                 values[key] = form.getlist(key)
+        elif field_type == "list":
+            indexed_values = []
+            i = 0
+            sub_props = field.get("item_schema", {}).get("properties", {})
+            if sub_props:
+                while True:
+                    item = {}
+                    found_any_for_index = False
+                    for sub_key in sub_props:
+                        form_key = f"{key}-{i}-{sub_key}"
+                        if form_key in form:
+                            item[sub_key] = form[form_key]
+                            found_any_for_index = True
+                    if not found_any_for_index:
+                        break
+                    indexed_values.append(item)
+                    i += 1
+                if indexed_values:
+                    values[key] = indexed_values
         elif key in form:
             raw = form[key]
             if field_type == "int":
@@ -99,6 +119,11 @@ def _form_to_settings(form: FormData, schema: dict[str, dict[str, Any]]) -> dict
             else:
                 values[key] = raw
     return values
+
+
+# An instance id doubles as a TOML table key (settings.toml) and a URL path
+# segment (/modules/<id>/...) - keep it to characters that are safe in both.
+_INSTANCE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def _check_password(candidate: str, password: str) -> bool:
@@ -136,7 +161,7 @@ class SnoozeRequest(BaseModel):
     minutes: float = 9
 
 
-class WebUIController:
+class WebUIController(Configurable):
     """HTTP control plane controller. Owns a FastAPI app; routes reach into the
     Scheduler and other modules directly via attach_context()."""
 
@@ -148,23 +173,17 @@ class WebUIController:
         name: str,
         bus: Any,
         config: dict[str, Any] | None = None,
-        store: SettingsStore | None = None,
+        settings_path: Path | None = None,
     ) -> None:
+        super().__init__(name, bus, config, settings_path)
         self.name = name
         self.bus = bus
         self.config = config or {}
-        self.store = store
         self._scheduler: Scheduler | None = None
         self._modules: dict[str, Module] = {}
         self._server: uvicorn.Server | None = None
         self._server_task: asyncio.Task[None] | None = None
         self._sessions: set[str] = set()
-
-        schema = self.get_settings_schema()
-        defaults = {key: field["default"] for key, field in schema.items() if "default" in field}
-        persisted = self.store.get(name) if self.store is not None else None
-        known_persisted = {key: value for key, value in (persisted or {}).items() if key in schema}
-        self.settings: dict[str, Any] = {**defaults, **known_persisted}
 
         self.app = FastAPI(title="Alarm Clock")
         self.app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -230,17 +249,19 @@ class WebUIController:
 
         if not server.started:
             task.cancel()
+            logger.error("webui failed to bind %s:%s", host, port, module_name=self.name)
             raise RuntimeError(f"webui failed to bind {host}:{port}")
 
         self._server = server
         self._server_task = task
-        logger.info("webui listening on %s:%s", host, port, module_name="uvicorn")
+        logger.info("webui listening on %s:%s", host, port, module_name=self.name)
 
     async def disable(self) -> None:
         """Disable the web UI controller."""
         if not self.enabled:
             return
 
+        logger.info("webui shutting down", module_name=self.name)
         self.enabled = False
         if self._server is not None:
             self._server.should_exit = True
@@ -271,6 +292,13 @@ class WebUIController:
                 "label": "Port",
                 "requires_restart": True,
                 "default": 5000,
+            },
+            "timezone": {
+                "type": "select",
+                "options": TIMEZONES,
+                "label": "Zeitzone",
+                "requires_restart": True,
+                "default": "UTC",
             },
             "password": {
                 "type": "password",
@@ -318,12 +346,16 @@ class WebUIController:
         schema = self.get_settings_schema()
         validated = validate_against_schema(values, schema)
         self.settings = {**self.settings, **validated}
-        if self.store is not None:
-            self.store.set(self.name, validated)
+        await self.save_config(self.name, validated)
         # A settings change may have set/cleared/rotated the password - drop
         # all logged-in sessions rather than track whether this particular
         # update touched it.
         self._sessions.clear()
+        logger.info(
+            "webui settings updated: %s",
+            ", ".join(sorted(validated)) or "(none)",
+            module_name=self.name,
+        )
 
     # -- helpers used by routes ---------------------------------------------
 
@@ -395,16 +427,21 @@ class WebUIController:
 
         @app.post("/login", include_in_schema=False)
         async def login_submit(
-            password: str = Form(""), next: str = Form("/")
+            request: Request, password: str = Form(""), next: str = Form("/")
         ) -> RedirectResponse:
             safe_next = _safe_next(next)
+            client_host = request.client.host if request.client else "unknown"
             configured = self.settings.get("password", "")
             if not configured or not _check_password(password, configured):
+                logger.warning(
+                    "failed login attempt from %s", client_host, module_name=self.name
+                )
                 return RedirectResponse(
                     f"/login?next={safe_next}&error=Wrong password", status_code=303
                 )
             token = secrets.token_urlsafe(32)
             self._sessions.add(token)
+            logger.info("login from %s", client_host, module_name=self.name)
             response = RedirectResponse(safe_next, status_code=303)
             response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax")
             return response
@@ -415,7 +452,7 @@ class WebUIController:
 
         @app.get("/plan")
         async def get_plan() -> dict[str, Any]:
-            return self._get_scheduler().get_plan().to_dict()
+            return (await self._get_scheduler().get_plan()).to_dict()
 
         @app.post("/plan/groups")
         async def create_group(payload: GroupCreate) -> dict[str, Any]:
@@ -423,7 +460,7 @@ class WebUIController:
             try:
                 days = frozenset(Weekday(day) for day in payload.days)
                 time = datetime.time.fromisoformat(payload.time)
-                group = scheduler.create_group(days, time)
+                group = await scheduler.create_group(days, time)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return group.to_dict()
@@ -433,15 +470,15 @@ class WebUIController:
             scheduler = self._get_scheduler()
             try:
                 time = datetime.time.fromisoformat(payload.time)
-                scheduler.set_group_time(group_id, time, permanent=payload.permanent)
+                await scheduler.set_group_time(group_id, time, permanent=payload.permanent)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return scheduler.get_plan().to_dict()
+            return (await scheduler.get_plan()).to_dict()
 
         @app.delete("/plan/groups/{group_id}")
         async def remove_group(group_id: str) -> dict[str, str]:
             try:
-                self._get_scheduler().delete_group(group_id)
+                await self._get_scheduler().delete_group(group_id)
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             return {"status": "ok"}
@@ -454,16 +491,16 @@ class WebUIController:
             try:
                 time = datetime.time.fromisoformat(payload.time)
                 if payload.permanent:
-                    scheduler.create_group(frozenset({weekday}), time)
+                    await scheduler.create_group(frozenset({weekday}), time)
                 else:
-                    scheduler.set_day_once(weekday, time)
+                    await scheduler.set_day_once(weekday, time)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return scheduler.get_plan().to_dict()
+            return (await scheduler.get_plan()).to_dict()
 
         @app.post("/plan/disable")
         async def disable_plan() -> dict[str, str]:
-            self._get_scheduler().set_enabled(False)
+            await self._get_scheduler().set_enabled(False)
             return {"status": "ok"}
 
         @app.post("/plan/stop")
@@ -478,23 +515,37 @@ class WebUIController:
 
         @app.get("/modules")
         async def list_modules() -> list[dict[str, Any]]:
-            return [
-                {
+            result = []
+            for module in self._modules.values():
+                # Determine the type based on the class name
+                module_type = module.__class__.__name__.replace("Module", "").lower()
+
+                # Create a more descriptive display_name that includes hardware-specific info
+                display_name = module.display_name
+                if hasattr(module, 'pin') and module_type in ('led', 'button'):
+                    # Include pin information for LED and Button modules to make them more identifiable
+                    display_name = f"{module.display_name} (Pin {module.pin})"
+
+                result.append({
                     "name": module.name,
+                    "type": module_type,
                     "enabled": module.enabled,
                     "needs_restart": module.needs_restart,
-                    "display_name": module.display_name,
+                    "display_name": display_name,
                     "icon": module.icon,
-                }
-                for module in self._modules.values()
-            ]
+                })
+            return result
 
         @app.post("/modules/{name}/enable")
         async def enable_module(name: str) -> dict[str, str]:
             try:
                 await self._get_module(name).set_active(True)
             except SettingsValidationError as exc:
+                logger.warning(
+                    "enabling module %s failed: %s", name, exc, module_name=self.name
+                )
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            logger.info("module %s enabled", name, module_name=self.name)
             return {"status": "ok"}
 
         @app.post("/modules/{name}/disable")
@@ -502,12 +553,17 @@ class WebUIController:
             try:
                 await self._get_module(name).set_active(False)
             except SettingsValidationError as exc:
+                logger.warning(
+                    "disabling module %s failed: %s", name, exc, module_name=self.name
+                )
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            logger.info("module %s disabled", name, module_name=self.name)
             return {"status": "ok"}
 
         @app.post("/modules/{name}/restart")
         async def restart_module(name: str) -> dict[str, str]:
             await self._get_module(name).restart()
+            logger.info("module %s restarted", name, module_name=self.name)
             return {"status": "ok"}
 
         @app.get("/modules/{name}/settings/schema")
@@ -524,7 +580,14 @@ class WebUIController:
             try:
                 await module.update_settings(values)
             except SettingsValidationError as exc:
+                logger.warning(
+                    "updating settings for module %s failed: %s",
+                    name,
+                    exc,
+                    module_name=self.name,
+                )
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            logger.info("settings updated for module %s", name, module_name=self.name)
             return await module.get_settings()
 
         self.app.include_router(app)
@@ -542,54 +605,27 @@ class WebUIController:
             confirm_delete: str | None = None,
         ):
             scheduler = self._get_scheduler()
-            plan = scheduler.get_plan()
+            plan = await scheduler.get_plan()
             now = datetime.datetime.now(scheduler.tz)
+            status = scheduler.get_alarm_status(now)
 
-            reference_date = scheduler.get_alarm_reference_date(now)
-            is_skipped = scheduler.is_next_alarm_skipped(now)
-            override_time: datetime.time | None = None
-            if reference_date is not None and not is_skipped and reference_date in plan.overrides:
-                override_time = plan.overrides[reference_date]
-
-            affected_group_id = None
-            if reference_date is not None:
-                affected_weekday = Weekday(reference_date.weekday())
-                affected_group_id = next(
-                    (
-                        group.id
-                        for group in plan.groups
-                        if group.enabled and affected_weekday in group.days
-                    ),
-                    None,
-                )
-
-            trigger = scheduler.next_trigger(plan, now)
-            if trigger is None:
+            if status.trigger is None:
                 next_alarm_hint = "Kein Wecker geplant"
             else:
-                delta_days = (trigger.date() - now.date()).days
+                delta_days = (status.trigger.date() - now.date()).days
                 if delta_days == 0:
                     day_word = "heute"
                 elif delta_days == 1:
                     day_word = "morgen"
                 else:
-                    day_word = WEEKDAY_LABELS[Weekday(trigger.date().weekday())]
-                next_alarm_hint = f"Klingelt {day_word} um {trigger.strftime('%H:%M')} Uhr"
+                    day_word = WEEKDAY_LABELS[Weekday(status.trigger.date().weekday())]
+                next_alarm_hint = f"Klingelt {day_word} um {status.trigger.strftime('%H:%M')} Uhr"
 
-            day_owner: dict[Weekday, str] = {}
-            for group in plan.groups:
-                if not group.enabled:
-                    continue
-                for day in group.days:
-                    day_owner[day] = group.id
+            day_owner = scheduler.day_owner()
 
             groups = []
             for group in plan.groups:
-                reenable_blocked_by = (
-                    sorted(group.days & day_owner.keys(), key=lambda d: d.value)
-                    if not group.enabled
-                    else []
-                )
+                reenable_blocked_by = scheduler.blocking_days(group)
                 groups.append(
                     {
                         "id": group.id,
@@ -634,10 +670,10 @@ class WebUIController:
                     "all_weekdays": list(Weekday),
                     "weekday_labels": WEEKDAY_LABELS,
                     "day_owner": day_owner,
-                    "is_skipped": is_skipped,
-                    "override_time": override_time,
+                    "is_skipped": status.is_skipped,
+                    "override_time": status.override_time,
                     "next_alarm_hint": next_alarm_hint,
-                    "affected_group_id": affected_group_id,
+                    "affected_group_id": status.affected_group_id,
                     "any_editing": edit is not None,
                     "modules": modules,
                     "error": error,
@@ -658,7 +694,7 @@ class WebUIController:
             try:
                 parsed_days = frozenset(Weekday(int(day)) for day in days)
                 parsed_time = datetime.time.fromisoformat(time)
-                scheduler.create_group(parsed_days, parsed_time)
+                await scheduler.create_group(parsed_days, parsed_time)
             except ValueError as exc:
                 return RedirectResponse(f"/?error={exc}", status_code=303)
             return RedirectResponse("/", status_code=303)
@@ -673,7 +709,7 @@ class WebUIController:
             try:
                 parsed_days = frozenset(Weekday(int(day)) for day in days)
                 parsed_time = datetime.time.fromisoformat(time)
-                scheduler.update_group(group_id, parsed_days, parsed_time)
+                await scheduler.update_group(group_id, parsed_days, parsed_time)
             except ValueError as exc:
                 return RedirectResponse(f"/?error={exc}&edit={group_id}", status_code=303)
             return RedirectResponse("/", status_code=303)
@@ -681,7 +717,7 @@ class WebUIController:
         @app.post("/plan/groups/{group_id}/toggle", include_in_schema=False)
         async def ui_toggle_group(group_id: str) -> RedirectResponse:
             try:
-                self._get_scheduler().toggle_group_enabled(group_id)
+                await self._get_scheduler().toggle_group_enabled(group_id)
             except ValueError as exc:
                 return RedirectResponse(f"/?error={exc}", status_code=303)
             return RedirectResponse("/", status_code=303)
@@ -689,14 +725,14 @@ class WebUIController:
         @app.post("/plan/groups/{group_id}/delete", include_in_schema=False)
         async def ui_delete_group(group_id: str) -> RedirectResponse:
             try:
-                self._get_scheduler().delete_group(group_id)
+                await self._get_scheduler().delete_group(group_id)
             except ValueError as exc:
                 return RedirectResponse(f"/?error={exc}", status_code=303)
             return RedirectResponse("/", status_code=303)
 
         @app.post("/plan/master/skip", include_in_schema=False)
         async def ui_skip_next_alarm() -> RedirectResponse:
-            self._get_scheduler().skip_next_alarm()
+            await self._get_scheduler().skip_next_alarm()
             return RedirectResponse("/", status_code=303)
 
         @app.post("/plan/override", include_in_schema=False)
@@ -706,12 +742,12 @@ class WebUIController:
                 parsed_time = datetime.time.fromisoformat(time)
             except ValueError as exc:
                 return RedirectResponse(f"/?error={exc}", status_code=303)
-            scheduler.override_next_alarm_time(parsed_time)
+            await scheduler.override_next_alarm_time(parsed_time)
             return RedirectResponse("/", status_code=303)
 
         @app.post("/plan/override/clear", include_in_schema=False)
         async def ui_clear_override() -> RedirectResponse:
-            self._get_scheduler().clear_alarm_override()
+            await self._get_scheduler().clear_alarm_override()
             return RedirectResponse("/", status_code=303)
 
         @app.post("/modules/{name}/enable", include_in_schema=False)
@@ -719,7 +755,11 @@ class WebUIController:
             try:
                 await self._get_module(name).set_active(True)
             except SettingsValidationError as exc:
+                logger.warning(
+                    "enabling module %s failed: %s", name, exc, module_name=self.name
+                )
                 return RedirectResponse(f"/?error={exc}", status_code=303)
+            logger.info("module %s enabled", name, module_name=self.name)
             return RedirectResponse("/", status_code=303)
 
         @app.post("/modules/{name}/disable", include_in_schema=False)
@@ -727,13 +767,81 @@ class WebUIController:
             try:
                 await self._get_module(name).set_active(False)
             except SettingsValidationError as exc:
+                logger.warning(
+                    "disabling module %s failed: %s", name, exc, module_name=self.name
+                )
                 return RedirectResponse(f"/?error={exc}", status_code=303)
+            logger.info("module %s disabled", name, module_name=self.name)
             return RedirectResponse("/", status_code=303)
 
         @app.post("/modules/{name}/restart", include_in_schema=False)
         async def ui_restart_module(name: str, next: str = Form("/")) -> RedirectResponse:
             await self._get_module(name).restart()
+            logger.info("module %s restarted", name, module_name=self.name)
             return RedirectResponse(_safe_next(next), status_code=303)
+
+        @app.get("/modules/new", include_in_schema=False)
+        async def ui_new_module_form(request: Request, error: str | None = None):
+            module_types = {
+                key: (cls.display_name or key)
+                for key, cls in available_module_types(self._settings_path).items()
+            }
+            return templates.TemplateResponse(
+                request,
+                "add_module.html",
+                {"module_types": module_types, "error": error},
+            )
+
+        @app.post("/modules/new", include_in_schema=False)
+        async def ui_create_module(
+            instance_id: str = Form(""), module_type: str = Form("")
+        ) -> RedirectResponse:
+            instance_id = instance_id.strip()
+            if not _INSTANCE_ID_RE.match(instance_id):
+                return RedirectResponse(
+                    "/modules/new?error=Name+darf+nur+Buchstaben%2C+Zahlen%2C+-+und+_+enthalten",
+                    status_code=303,
+                )
+            if instance_id in self._modules:
+                return RedirectResponse(
+                    f"/modules/new?error=%22{instance_id}%22+existiert+bereits", status_code=303
+                )
+
+            module_cls = available_module_types(self._settings_path).get(module_type)
+            if module_cls is None:
+                return RedirectResponse(
+                    f"/modules/new?error=unbekannter+Modultyp+%22{module_type}%22", status_code=303
+                )
+
+            try:
+                write_registry_entry(self._settings_path, instance_id, module_type)
+            except ValueError as exc:
+                return RedirectResponse(f"/modules/new?error={exc}", status_code=303)
+
+            try:
+                module = module_cls(
+                    name=instance_id, bus=self.bus, config={"module": module_type},
+                    settings_path=self._settings_path,
+                )
+                await module.load_config(instance_id)
+                await module.init()
+                if module.settings.get("active", True):
+                    await module.enable()
+            except Exception as exc:
+                logger.error(
+                    "failed to bring up new module %s (%s): %s",
+                    instance_id, module_type, exc, module_name=self.name,
+                )
+                return RedirectResponse(
+                    f"/modules/new?error=Modul+angelegt%2C+Start+fehlgeschlagen%3A+{exc}",
+                    status_code=303,
+                )
+
+            self._modules[instance_id] = module
+            logger.info(
+                "module %s (%s) added", instance_id, module_type, module_name=self.name
+            )
+            return RedirectResponse(f"/modules/{instance_id}/settings", status_code=303)
 
         @app.get("/modules/{name}/settings", include_in_schema=False)
         async def ui_module_settings(request: Request, name: str, error: str | None = None):
@@ -761,7 +869,41 @@ class WebUIController:
                 values = _form_to_settings(form, schema)
                 await module.update_settings(values)
             except (SettingsValidationError, ValueError) as exc:
+                logger.warning(
+                    "updating settings for module %s failed: %s",
+                    name,
+                    exc,
+                    module_name=self.name,
+                )
                 return RedirectResponse(
                     f"/modules/{name}/settings?error={exc}", status_code=303
                 )
+            logger.info("settings updated for module %s", name, module_name=self.name)
             return RedirectResponse(f"/modules/{name}/settings", status_code=303)
+
+        @app.get("/settings", include_in_schema=False)
+        async def ui_webui_settings(request: Request):
+            schema = self.get_settings_schema()
+            resolved_schema = _resolve_widgets(schema)
+            return templates.TemplateResponse(
+                request,
+                "webui_settings.html",
+                {
+                    "schema": resolved_schema,
+                    "values": self.settings,
+                },
+            )
+
+        @app.post("/settings", include_in_schema=False)
+        async def ui_update_webui_settings(request: Request) -> RedirectResponse:
+            schema = self.get_settings_schema()
+            form = await request.form()
+            try:
+                values = _form_to_settings(form, schema)
+                await self.update_settings(values)
+            except (SettingsValidationError, ValueError) as exc:
+                logger.warning("updating webui settings failed: %s", exc, module_name=self.name)
+                return RedirectResponse(
+                    f"/settings?error={exc}", status_code=303
+                )
+            return RedirectResponse("/settings", status_code=303)

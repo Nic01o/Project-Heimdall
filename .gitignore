@@ -1,4 +1,6 @@
 .venv
 .idea
+/config/settings.toml
 rpi_config.txt
 /data
+__pycache__/

@@ -5,6 +5,26 @@ from __future__ import annotations
 
 from typing import Any
 
+TIMEZONES: list[str] = [
+    "UTC",
+    "Europe/Berlin",
+    "Europe/Vienna",
+    "Europe/Zurich",
+    "Europe/London",
+    "Europe/Paris",
+    "Europe/Madrid",
+    "Europe/Rome",
+    "Europe/Moscow",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "Asia/Tokyo",
+    "Asia/Shanghai",
+    "Asia/Kolkata",
+    "Australia/Sydney",
+]
+
 FIELD_TYPES: dict[str, dict[str, Any]] = {
     "int": {"widget": "number"},
     "float": {"widget": "number"},
@@ -14,6 +34,8 @@ FIELD_TYPES: dict[str, dict[str, Any]] = {
     "select": {"widget": "dropdown"},  # needs "options"
     "multiselect": {"widget": "checkboxes"},  # needs "options"
     "color": {"widget": "colorpicker"},
+    "list": {"widget": "none"},
+    "list": {"widget": "none"},
 }
 
 
