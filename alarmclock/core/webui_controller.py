@@ -69,6 +69,45 @@ def _resolve_widgets(schema: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
     return resolved
 
 
+def _split_reaction_fields(
+    schema: dict[str, dict[str, Any]],
+    values: dict[str, Any],
+    locked_fields: set[str],
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None]:
+    """Pull a module's `reaction_<flag>` fields (see OutputModule) out of the
+    generic per-field settings form into a dedicated add/remove list -
+    dumping one dropdown per every possible flag stops being usable once a
+    module reacts to more than a couple. Locked flags are left in the
+    generic schema instead (rendered disabled, like any other locked field),
+    since the reactions list only supports flags a user can actually edit.
+
+    Returns `(generic_schema, reactions)`, where `reactions` is None if the
+    module has no editable reaction fields at all (i.e. not an OutputModule).
+    """
+    editable_flags = sorted(
+        key[len("reaction_"):]
+        for key in schema
+        if key.startswith("reaction_") and key not in locked_fields
+    )
+    generic_schema = {
+        key: field
+        for key, field in schema.items()
+        if not (key.startswith("reaction_") and key[len("reaction_"):] in editable_flags)
+    }
+    if not editable_flags:
+        return generic_schema, None
+
+    options = [opt for opt in schema[f"reaction_{editable_flags[0]}"]["options"] if opt != "ignore"]
+    active = [
+        {"flag": flag, "value": values.get(f"reaction_{flag}", "ignore")}
+        for flag in editable_flags
+        if values.get(f"reaction_{flag}", "ignore") != "ignore"
+    ]
+    active_flags = {entry["flag"] for entry in active}
+    free_flags = [flag for flag in editable_flags if flag not in active_flags]
+    return generic_schema, {"active": active, "free_flags": free_flags, "options": options}
+
+
 def _editable_schema(schema: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """`active` is controlled via the dedicated enable/disable buttons
     (module.set_active(), see /modules/{name}/enable|disable) - excluded
@@ -848,17 +887,47 @@ class WebUIController(Configurable):
             module = self._get_module(name)
             schema = _editable_schema(module.get_settings_schema())
             values = await module.get_settings()
+            generic_schema, reactions = _split_reaction_fields(schema, values, module.locked_fields)
             return templates.TemplateResponse(
                 request,
                 "module_settings.html",
                 {
                     "module": module,
-                    "schema": _resolve_widgets(schema),
+                    "schema": _resolve_widgets(generic_schema),
+                    "reactions": reactions,
                     "values": values,
                     "locked_fields": module.locked_fields,
                     "error": error,
                 },
             )
+
+        async def _set_reaction(name: str, flag: str, reaction: str) -> RedirectResponse:
+            module = self._get_module(name)
+            try:
+                await module.update_settings({f"reaction_{flag}": reaction})
+            except SettingsValidationError as exc:
+                logger.warning(
+                    "setting reaction %s for module %s failed: %s",
+                    flag,
+                    name,
+                    exc,
+                    module_name=self.name,
+                )
+                return RedirectResponse(f"/modules/{name}/settings?error={exc}", status_code=303)
+            logger.info(
+                "module %s: reaction for %s set to %s", name, flag, reaction, module_name=self.name
+            )
+            return RedirectResponse(f"/modules/{name}/settings", status_code=303)
+
+        @app.post("/modules/{name}/reactions", include_in_schema=False)
+        async def ui_add_reaction(
+            name: str, flag: str = Form(...), reaction: str = Form(...)
+        ) -> RedirectResponse:
+            return await _set_reaction(name, flag, reaction)
+
+        @app.post("/modules/{name}/reactions/{flag}", include_in_schema=False)
+        async def ui_update_reaction(name: str, flag: str, reaction: str = Form(...)) -> RedirectResponse:
+            return await _set_reaction(name, flag, reaction)
 
         @app.post("/modules/{name}/settings", include_in_schema=False)
         async def ui_update_module_settings(name: str, request: Request) -> RedirectResponse:

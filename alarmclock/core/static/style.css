@@ -584,6 +584,12 @@ a {
   padding: 1rem 0 0;
 }
 
+.module-type-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-left: 0.4rem;
+}
+
 .plan-list {
   display: flex;
   flex-direction: column;
@@ -650,6 +656,15 @@ a {
 
 .reaction-row.ghost {
   opacity: 0.8;
+}
+
+.reaction-row form {
+  display: contents;
+}
+
+.reaction-flag {
+  flex: 1;
+  font-weight: 600;
 }
 
 .row-main:hover,

@@ -18,6 +18,7 @@ Real hardware access lives behind a driver picked via the "driver" setting -
 """
 
 from __future__ import annotations
+import asyncio
 from typing import Any
 from alarmclock.modules.base import OutputModule
 from alarmclock.modules.led.mock import MockLEDDriver
@@ -35,9 +36,33 @@ class LEDModule(OutputModule):
     reactions = OutputModule.reactions + ["blink", "flash_1", "flash_2", "flash_3", "flash_4"]
     default_reactions = {"alarm_triggered": "blink"}
 
+    # Seconds between on/off toggles while a "blink" reaction is running.
+    blink_interval: float = 0.5
+    # Seconds each flash's on/off half lasts.
+    flash_interval: float = 0.2
+
     async def init(self) -> None:
         self._driver = self._make_driver()
         await self.subscribe_flags()
+
+    async def _apply_pattern_reaction(self, reaction: str) -> None:
+        if reaction == "blink":
+            self._is_blinking = True
+            self._blink_task = asyncio.create_task(self._blink_loop())
+        elif reaction.startswith("flash_"):
+            self._blink_task = asyncio.create_task(self._flash_loop(int(reaction.removeprefix("flash_"))))
+
+    async def _blink_loop(self) -> None:
+        while True:
+            await self.set_output(not self.is_on)
+            await asyncio.sleep(self.blink_interval)
+
+    async def _flash_loop(self, count: int) -> None:
+        for _ in range(count):
+            await self.set_output(True)
+            await asyncio.sleep(self.flash_interval)
+            await self.set_output(False)
+            await asyncio.sleep(self.flash_interval)
 
     def _make_driver(self) -> Any:
         if self.config.get("driver", "mock") == "real":

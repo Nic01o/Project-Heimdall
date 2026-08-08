@@ -1,99 +1,78 @@
 {% extends "base.html" %}
 {% import "_widgets.html" as widgets %}
-{% block title %}{{ module.display_name or module.name }} settings{% endblock %}
+{% block title %}{{ module.name }} settings{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
 <div class="card">
-<h1>{{ module.display_name or module.name }} settings
+<h1>{{ module.name }}
+  {% if module.display_name and module.display_name != module.name %}
+    <span class="module-type-hint">{{ module.display_name }}</span>
+  {% endif %}
+  settings
   {{ widgets.restart_hint(module, "/modules/" ~ module.name ~ "/settings") }}
 </h1>
 <form method="post" action="/modules/{{ module.name }}/settings">
   {% for key, field in schema.items() %}
-    {% if key != "reactions" %}
-      {{ widgets.render_field(key, field, values.get(key), key in locked_fields) }}
-    {% endif %}
+    {{ widgets.render_field(key, field, values.get(key), key in locked_fields) }}
   {% else %}
     <p>This module has no configurable settings.</p>
   {% endfor %}
 
-  <!-- Reactions section -->
-  {% if 'reactions' in schema and schema.reactions.item_schema and schema.reactions.item_schema.properties %}
-  <h2>Reactions</h2>
-  <table id="reactions-table" class="reactions-table">
-    <thead>
-      <tr>
-        <th>Flag</th>
-        <th>Reaction</th>
-        <th>Action</th>
-      </tr>
-    </thead>
-    <tbody>
-      <!-- Existing rows -->
-      {% for reaction in values.get("reactions", []) %}
-      <tr class="reaction-row">
-        <td>
-          <input type="hidden" name="reactions-{{ loop.index0 }}-flag" value="{{ reaction.flag }}">
-          <select name="reactions-{{ loop.index0 }}-flag-display" class="reaction-flag-display">
-            {% if schema.reactions.item_schema.properties.flag and schema.reactions.item_schema.properties.flag.enum %}
-              {% for flag in schema.reactions.item_schema.properties.flag.enum %}
-                <option value="{{ flag }}" {% if flag == reaction.flag %}selected{% endif %}>{{ flag }}</option>
-              {% endfor %}
-            {% else %}
-              <option value="{{ reaction.flag }}" selected>{{ reaction.flag }}</option>
-            {% endif %}
-          </select>
-        </td>
-        <td>
-          <select name="reactions-{{ loop.index0 }}-reaction" class="reaction-reaction">
-            {% if schema.reactions.item_schema.properties.reaction and schema.reactions.item_schema.properties.reaction.enum %}
-              {% for reaction_type in schema.reactions.item_schema.properties.reaction.enum %}
-                <option value="{{ reaction_type }}" {% if reaction_type == reaction.reaction %}selected{% endif %}>{{ reaction_type }}</option>
-              {% endfor %}
-            {% else %}
-              <option value="{{ reaction.reaction }}" selected>{{ reaction.reaction }}</option>
-            {% endif %}
-          </select>
-        </td>
-        <td>
-          <button type="button" class="delete-row">Delete</button>
-        </td>
-      </tr>
-      {% endfor %}
-
-      <!-- Add new row -->
-      <tr id="add-row">
-        <td>
-          <select name="new-reaction-flag" class="reaction-flag">
-            <option value="">Select a flag</option>
-            {% if schema.reactions.item_schema.properties.flag and schema.reactions.item_schema.properties.flag.enum %}
-              {% for flag in schema.reactions.item_schema.properties.flag.enum %}
-                <option value="{{ flag }}">{{ flag }}</option>
-              {% endfor %}
-            {% endif %}
-          </select>
-        </td>
-        <td>
-          <select name="new-reaction-reaction" class="reaction-reaction">
-            <option value="">Select a reaction</option>
-            {% if schema.reactions.item_schema.properties.reaction and schema.reactions.item_schema.properties.reaction.enum %}
-              {% for reaction_type in schema.reactions.item_schema.properties.reaction.enum %}
-                <option value="{{ reaction_type }}">{{ reaction_type }}</option>
-              {% endfor %}
-            {% endif %}
-          </select>
-        </td>
-        <td>
-          <button type="button" id="add-reaction">Add</button>
-        </td>
-      </tr>
-    </tbody>
-  </table>
-  {% endif %}
-
   {% if schema %}<button type="submit">Save</button>{% endif %}
 </form>
 </div>
+
+{% if reactions %}
+<div class="card">
+<h2>Reactions</h2>
+<div class="reactions-list">
+  {% if not reactions.active %}
+    <p class="list-hint">Noch keine Reaktionen konfiguriert</p>
+  {% endif %}
+
+  {% for entry in reactions.active %}
+  <div class="reaction-row">
+    <span class="reaction-flag">{{ entry.flag }}</span>
+    <form method="post" action="/modules/{{ module.name }}/reactions/{{ entry.flag }}">
+      <select name="reaction">
+        {% for option in reactions.options %}
+          <option value="{{ option }}" {% if option == entry.value %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+      <div class="row-actions">
+        <button type="submit" class="row-action confirm" aria-label="Reaktion speichern">&#10003;</button>
+      </div>
+    </form>
+    <form method="post" action="/modules/{{ module.name }}/reactions/{{ entry.flag }}">
+      <input type="hidden" name="reaction" value="ignore">
+      <div class="row-actions">
+        <button type="submit" class="row-action delete" aria-label="Reaktion entfernen">&#10005;</button>
+      </div>
+    </form>
+  </div>
+  {% endfor %}
+
+  {% if reactions.free_flags %}
+  <form method="post" action="/modules/{{ module.name }}/reactions" class="reaction-row ghost">
+    <select name="flag">
+      {% for flag in reactions.free_flags %}
+        <option value="{{ flag }}">{{ flag }}</option>
+      {% endfor %}
+    </select>
+    <select name="reaction">
+      {% for option in reactions.options %}
+        <option value="{{ option }}">{{ option }}</option>
+      {% endfor %}
+    </select>
+    <div class="row-actions">
+      <button type="submit" class="row-action confirm" aria-label="Reaktion hinzufügen">&#10003;</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+</div>
+{% endif %}
 
 <p><a href="/">&larr; back</a></p>
 {% endblock %}
@@ -138,65 +117,6 @@
   accentInput.addEventListener("input", preview);
   accentStrongInput.addEventListener("input", preview);
   updateVisibility();
-
-  // Handle adding new reaction rows
-  document.getElementById('add-reaction').addEventListener('click', function() {
-    var flagSelect = document.querySelector('#add-row select.reaction-flag');
-    var reactionSelect = document.querySelector('#add-row select.reaction-reaction');
-
-    if (!flagSelect.value || !reactionSelect.value) {
-      alert("Please select both a flag and a reaction");
-      return;
-    }
-
-    var tableBody = document.querySelector('#reactions-table tbody');
-    var newRow = document.createElement('tr');
-    newRow.className = 'reaction-row';
-
-    // Create the new row with proper name attributes for form submission
-    var rowIndex = tableBody.querySelectorAll('.reaction-row').length;
-
-    // Create flag cell
-    var flagCell = document.createElement('td');
-    flagCell.innerHTML = '<input type="hidden" name="reactions-' + rowIndex + '-flag" value="' + flagSelect.value + '">' +
-      '<select name="reactions-' + rowIndex + '-flag-display" class="reaction-flag-display">' +
-      '<option value="' + flagSelect.value + '" selected>' + flagSelect.value + '</option>' +
-      '</select>';
-
-    // Create reaction cell
-    var reactionCell = document.createElement('td');
-    reactionCell.innerHTML = '<select name="reactions-' + rowIndex + '-reaction" class="reaction-reaction">' +
-      '<option value="' + reactionSelect.value + '" selected>' + reactionSelect.value + '</option>' +
-      '</select>';
-
-    // Create action cell
-    var actionCell = document.createElement('td');
-    actionCell.innerHTML = '<button type="button" class="delete-row">Delete</button>';
-
-    // Add all cells to the new row
-    newRow.appendChild(flagCell);
-    newRow.appendChild(reactionCell);
-    newRow.appendChild(actionCell);
-
-    // Insert before the add-row (ghost row)
-    tableBody.insertBefore(newRow, document.getElementById('add-row'));
-
-    // Reset the add row inputs
-    flagSelect.value = '';
-    reactionSelect.value = '';
-
-    // Add event listener to new delete button
-    newRow.querySelector('.delete-row').addEventListener('click', function() {
-      newRow.remove();
-    });
-  });
-
-  // Handle deleting existing rows
-  document.addEventListener('click', function(e) {
-    if (e.target.classList.contains('delete-row')) {
-      e.target.closest('.reaction-row').remove();
-    }
-  });
 })();
 </script>
 {% endif %}

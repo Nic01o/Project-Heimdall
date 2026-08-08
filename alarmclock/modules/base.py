@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import functools
 import importlib
 import tomllib
 import tomli_w
@@ -108,7 +109,10 @@ class Configurable:
             missing_defaults = {
                 key: field["default"]
                 for key, field in schema.items()
-                if "default" in field and key not in registry_instance and key not in overrides
+                if "default" in field
+                and key not in registry_instance
+                and key not in overrides
+                and not (key.startswith("reaction_") and field["default"] == "ignore")
             }
             if missing_defaults:
                 await self.save_config(instance_name, missing_defaults)
@@ -416,7 +420,18 @@ class Module(Configurable):
             if schema[key].get("requires_restart") and self.settings.get(key) != new_value:
                 self.needs_restart = True
         self.settings = {**self.settings, **validated}
-        await self.save_config(self.name, validated)
+
+        # A reaction_<flag> submitted as "ignore" - its own schema default -
+        # carries no information; skip persisting it so settings.toml only
+        # lists the flags this instance actually reacts to.
+        to_persist = {
+            key: value
+            for key, value in validated.items()
+            if not (key.startswith("reaction_") and value == "ignore" and schema[key].get("default") == "ignore")
+        }
+        if to_persist:
+            await self.save_config(self.name, to_persist)
+
         await self.bus.emit(f"{self.name}.settings_changed", self.settings)
 
     async def set_active(self, active: bool) -> None:
@@ -462,8 +477,7 @@ class OutputModule(Module):
     stays meaningful for any binary output (a speaker, a relay, ...).
     """
 
-    #
-    reactions: list[str] = ["ignore",]
+    reactions: list[str] = ["ignore", "on", "off", "toggle"]
     default_reactions: dict[str, str] = {}
 
     def get_settings_schema(self) -> dict[str, dict[str, Any]]:
@@ -491,7 +505,14 @@ class OutputModule(Module):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         # Pass kwargs through to Configurable.__init__
         super().__init__(*args, **kwargs)
+        # Task driving whatever ongoing pattern reaction is currently
+        # active (see `_apply_pattern_reaction`), if any.
         self._blink_task: asyncio.Task[None] | None = None
+        # Set by `_apply_pattern_reaction()` while its pattern should block
+        # ordinary flags from interrupting it (see
+        # `FlagSource.suppress_while_blinking`) - e.g. a continuous blink
+        # sets this, a bounded flash doesn't.
+        self._is_blinking: bool = False
 
     async def set_output(self, on: bool) -> None:
         await self._write(on)
@@ -507,9 +528,77 @@ class OutputModule(Module):
         self.enabled = True
 
     async def disable(self) -> None:
-        await self._stop_blinking()
+        await self._stop_pattern()
         await self.set_output(False)
         self.enabled = False
+
+    # -- reaction dispatch ----------------------------------------------------
+    #
+    # Subclasses call `subscribe_flags()` once from their `init()` to wire
+    # every flag in `alarmclock.modules.flags.FLAG_SOURCES` up to this
+    # module's own `reaction_<flag>` setting (see `get_settings_schema()`).
+
+    async def subscribe_flags(self) -> None:
+        """Subscribe to every bus event any flag could arrive on. Several
+        flags can share one event (e.g. all button gestures arrive as
+        `button.flag`), so this subscribes once per distinct event name and
+        lets `_on_flag_event()` resolve which flag actually fired."""
+        seen_events: set[str] = set()
+        for source in FLAG_SOURCES.values():
+            if source.event in seen_events:
+                continue
+            seen_events.add(source.event)
+            self.bus.subscribe(source.event, functools.partial(self._on_flag_event, source.event))
+
+    async def _on_flag_event(self, event: str, payload: dict[str, Any]) -> None:
+        flag = resolve_flag(event, payload)
+        if flag is None:
+            return
+        reaction = self.settings.get(f"reaction_{flag}", "ignore")
+        if reaction == "ignore":
+            return
+        if FLAG_SOURCES[flag].suppress_while_blinking and self._is_blinking:
+            return
+        await self._stop_pattern()
+        await self._apply_reaction(reaction)
+
+    async def _apply_reaction(self, reaction: str) -> None:
+        """Execute a reaction value from this module's `reactions`
+        vocabulary. Handles the hardware-agnostic on/off/toggle cases
+        directly via `set_output()`; anything else is delegated to
+        `_apply_pattern_reaction()`. Whatever pattern was previously running
+        has already been stopped by the caller (`_on_flag_event()`)."""
+        if reaction == "on":
+            await self.set_output(True)
+        elif reaction == "off":
+            await self.set_output(False)
+        elif reaction == "toggle":
+            await self.set_output(not self.is_on)
+        else:
+            await self._apply_pattern_reaction(reaction)
+
+    async def _apply_pattern_reaction(self, reaction: str) -> None:
+        """Start whatever ongoing pattern `reaction` names, beyond plain
+        on/off/toggle (e.g. an LED's "blink"/"flash_N"). Implemented by a
+        concrete module for its own hardware - list such reactions in the
+        module's own `reactions` (see `LEDModule`). The implementation is
+        responsible for setting `self._blink_task` to the task driving the
+        pattern (and `self._is_blinking` while it should block ordinary
+        flags, see `FlagSource.suppress_while_blinking`) so `_stop_pattern()`
+        can cancel it generically."""
+        raise NotImplementedError(f"{type(self).__name__} has no pattern reaction {reaction!r}")
+
+    async def _stop_pattern(self) -> None:
+        """Cancel whatever pattern task (see `_apply_pattern_reaction`) is
+        currently driving the output, if any."""
+        self._is_blinking = False
+        if self._blink_task is not None:
+            self._blink_task.cancel()
+            try:
+                await self._blink_task
+            except asyncio.CancelledError:
+                pass
+            self._blink_task = None
 
 class InputModule(Module):
     """Base for modules that read a single GPIO pin as input (a button, a

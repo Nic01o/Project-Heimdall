@@ -75,7 +75,8 @@ def test_alarm_triggered_blinks_until_stopped():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        module.settings["blink_interval_seconds"] = 0.01
+        module.blink_interval = 0.01
+        module.settings["reaction_alarm_stopped"] = "off"
         await module.init()
         await module.enable()
 
@@ -103,7 +104,7 @@ def test_alarm_snoozed_flashes_twice_then_off():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        module.settings["blink_interval_seconds"] = 0.01
+        module.blink_interval = 0.01
         await module.init()
         await module.enable()
 
@@ -131,10 +132,7 @@ def test_reaction_alarm_triggered_ignore_stops_the_led_from_blinking():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        # Use new reactions list format
-        module.settings["reactions"] = [
-            {"flag": "alarm_triggered", "reaction": "ignore"}
-        ]
+        module.settings["reaction_alarm_triggered"] = "ignore"
         await module.init()
         await module.enable()
 
@@ -168,20 +166,14 @@ def test_on_and_off_reactions_turn_led_solid():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        # Use the new reactions list format
-        module.settings["reactions"] = [
-            {"flag": "press", "reaction": "on"},
-            {"flag": "release", "reaction": "off"}
-        ]
+        module.settings["reaction_press"] = "on"
+        module.settings["reaction_release"] = "off"
         await module.init()
         await module.enable()
 
         await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": "press"})
         assert module._driver.is_on is True
 
-        await bus.emit("button.flag", {"name": "reg_release", "pin": 27, "flag": "release"})
-        # Wait, the flag name in the test was 'button'. Let me check if I should fix it too.
-        # Actually let's just use the same pattern as before but with new structure.
         await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": "release"})
         assert module._driver.is_on is False
 
@@ -195,17 +187,8 @@ def test_button_press_flag_does_not_override_alarm_blink():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        module.settings["blink_interval_seconds"] = 0.05
-        # Use new reactions list format - preserve existing default reactions
-        # but add the custom press reaction
-        existing_reactions = [
-            {"flag": "alarm_triggered", "reaction": "blink"},
-            {"flag": "alarm_stopped", "reaction": "off"},
-            {"flag": "alarm_snoozed", "reaction": "blink"},
-        ]
-        module.settings["reactions"] = existing_reactions + [
-            {"flag": "press", "reaction": "on"}
-        ]
+        module.blink_interval = 0.05
+        module.settings["reaction_press"] = "on"
         await module.init()
         await module.enable()
 
@@ -224,23 +207,25 @@ def test_click_flag_flashes_once():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        # Use new reactions list format
-        module.settings["reactions"] = [
-            {"flag": "click", "reaction": "flash_1"}
-        ]
+        module.settings["reaction_click"] = "flash_1"
         await module.init()
         await module.enable()
 
         flashes = []
-        original_flash = module._flash
 
         async def counting_flash(times):
             flashes.append(times)
-            await original_flash(times)
 
-        module._flash = counting_flash
+        module._flash_loop = counting_flash
 
         await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": "click"})
+        await asyncio.sleep(0)
+
+        assert flashes == [1]
+
+        await module.disable()
+
+    asyncio.run(scenario())
 
 
 
@@ -248,18 +233,9 @@ def test_different_flags_flash_different_counts():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        # Use new reactions list format - preserve existing default reactions
-        # but add the custom reaction for each flag
-        existing_reactions = [
-            {"flag": "alarm_triggered", "reaction": "blink"},
-            {"flag": "alarm_stopped", "reaction": "off"},
-            {"flag": "alarm_snoozed", "reaction": "blink"},
-        ]
-        module.settings["reactions"] = existing_reactions + [
-            {"flag": "double_click", "reaction": "flash_2"},
-            {"flag": "multi_click", "reaction": "flash_3"},
-            {"flag": "long_press", "reaction": "flash_4"},
-        ]
+        module.settings["reaction_double_click"] = "flash_2"
+        module.settings["reaction_multi_click"] = "flash_3"
+        module.settings["reaction_long_press"] = "flash_4"
         await module.init()
         await module.enable()
 
@@ -268,10 +244,11 @@ def test_different_flags_flash_different_counts():
         async def counting_flash(times):
             flashes.append(times)
 
-        module._flash = counting_flash
+        module._flash_loop = counting_flash
 
         for flag in ("double_click", "multi_click", "long_press"):
             await bus.emit("button.flag", {"name": "button", "pin": 27, "flag": flag})
+            await asyncio.sleep(0)
 
         assert flashes == [2, 3, 4]
 
@@ -284,16 +261,7 @@ def test_ignore_reaction_filters_out_a_flag():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        # Use new reactions list format - preserve existing default reactions
-        # but add the custom ignore reaction for press flag
-        existing_reactions = [
-            {"flag": "alarm_triggered", "reaction": "blink"},
-            {"flag": "alarm_stopped", "reaction": "off"},
-            {"flag": "alarm_snoozed", "reaction": "blink"},
-        ]
-        module.settings["reactions"] = existing_reactions + [
-            {"flag": "press", "reaction": "ignore"}
-        ]
+        module.settings["reaction_press"] = "ignore"
         await module.init()
         await module.enable()
 
@@ -309,16 +277,7 @@ def test_toggle_reaction_flips_current_state():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        # Use new reactions list format - preserve existing default reactions
-        # but add the custom toggle reaction for click flag
-        existing_reactions = [
-            {"flag": "alarm_triggered", "reaction": "blink"},
-            {"flag": "alarm_stopped", "reaction": "off"},
-            {"flag": "alarm_snoozed", "reaction": "blink"},
-        ]
-        module.settings["reactions"] = existing_reactions + [
-            {"flag": "click", "reaction": "toggle"}
-        ]
+        module.settings["reaction_click"] = "toggle"
         await module.init()
         await module.enable()
 
@@ -339,16 +298,7 @@ def test_custom_reaction_overrides_default_for_a_flag():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        # Use new reactions list format - preserve existing default reactions
-        # but add the custom toggle reaction for long_press flag
-        existing_reactions = [
-            {"flag": "alarm_triggered", "reaction": "blink"},
-            {"flag": "alarm_stopped", "reaction": "off"},
-            {"flag": "alarm_snoozed", "reaction": "blink"},
-        ]
-        module.settings["reactions"] = existing_reactions + [
-            {"flag": "long_press", "reaction": "toggle"}
-        ]
+        module.settings["reaction_long_press"] = "toggle"
         await module.init()
         await module.enable()
 
@@ -364,7 +314,7 @@ def test_disable_stops_blinking_and_turns_led_off():
     async def scenario():
         bus = EventBus()
         module = LEDModule("led", bus)
-        module.settings["blink_interval_seconds"] = 0.01
+        module.blink_interval = 0.01
         await module.init()
         await module.enable()
 

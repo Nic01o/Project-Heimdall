@@ -150,11 +150,12 @@
 <div class="card">
 <h1>Modules</h1>
 <table>
-  <thead><tr><th>Name</th><th>Status</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Modul</th><th>Status</th><th></th></tr></thead>
   <tbody>
   {% for module in modules %}
     <tr>
-      <td>{{ module.display_name or module.name }}</td>
+      <td>{{ module.name }}</td>
+      <td>{{ module.display_name or "" }}</td>
       <td>
         <span class="status-dot status-{{ module.status_class }}"
           title="{{ module.status_label }}" aria-label="{{ module.status_label }}"></span>
