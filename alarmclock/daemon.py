@@ -9,6 +9,7 @@ from alarmclock.core.event_bus import EventBus
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.core.webui_controller import WebUIController
 from alarmclock.modules.base import Module, available_module_types
+from alarmclock.modules.settings_types import detect_system_timezone
 from alarmclock.core.logger_wrapper import logger
 
 CONFIG_DIR: Path = Path(__file__).resolve().parent.parent / "config"
@@ -20,9 +21,18 @@ WATCHED_EVENTS = ("alarm.triggered", "alarm.stopped", "alarm.snoozed")
 async def run(demo_alarm_seconds: int | None) -> None:
     try:
         with open(SETTINGS_PATH, "rb") as f:
-            registry = tomllib.load(f).get("registry", {})
+            raw_settings = tomllib.load(f)
     except FileNotFoundError:
-        registry = {}
+        raw_settings = {}
+
+    registry = raw_settings.get("registry", {})
+    # The webui's "Zeitzone" setting is marked requires_restart, so it's fine
+    # to read it straight from disk here rather than through WebUIController
+    # (which isn't constructed yet) - this is the timezone the scheduler
+    # computes every wake-up trigger in. Falls back to the host's own system
+    # timezone (not hardcoded UTC) so a fresh install without any saved
+    # settings.toml entry still fires alarms at the right wall-clock time.
+    timezone = raw_settings.get("settings", {}).get("webui", {}).get("timezone") or detect_system_timezone()
 
     logger.info(f"Loaded {len(registry)} hardware instance(s)", module_name="daemon")
 
@@ -30,7 +40,7 @@ async def run(demo_alarm_seconds: int | None) -> None:
 
     bus = EventBus()
     webui_controller = WebUIController(name="webui", bus=bus, settings_path=SETTINGS_PATH)
-    scheduler = Scheduler(bus=bus, name="scheduler", settings_path=SETTINGS_PATH)
+    scheduler = Scheduler(bus=bus, name="scheduler", settings_path=SETTINGS_PATH, timezone=timezone)
 
     await scheduler.load_config(scheduler.name)
     await webui_controller.load_config(webui_controller.name)

@@ -13,7 +13,7 @@ from alarmclock.core.event_bus import EventBus
 from alarmclock.core.webui_controller import WebUIController
 from alarmclock.core.scheduler import Scheduler
 from alarmclock.modules.base import Module
-from alarmclock.modules.settings_types import SettingsValidationError
+from alarmclock.modules.settings_types import SettingsValidationError, detect_system_timezone
 
 
 @pytest.fixture(autouse=True)
@@ -120,8 +120,13 @@ def test_get_settings_schema():
     # Check default values
     assert schema["host"]["default"] == "0.0.0.0"
     assert schema["port"]["default"] == 5000
-    assert schema["timezone"]["default"] == "UTC"
+    # The timezone default is auto-detected from the host (see
+    # detect_system_timezone) rather than hardcoded, so it must at least be
+    # one of its own selectable options - and "Europe/Berlin" must always be
+    # among them regardless of what the host resolves to.
+    assert schema["timezone"]["default"] in schema["timezone"]["options"]
     assert "Europe/Berlin" in schema["timezone"]["options"]
+    assert schema["timezone"]["default"] == detect_system_timezone()
     assert schema["password"]["default"] == ""
     assert schema["color_profile"]["default"] == "sunrise"
     assert schema["custom_accent"]["default"] == "#000000"

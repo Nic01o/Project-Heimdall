@@ -3,7 +3,9 @@ Each type has one fixed meaning for validation AND rendering."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 TIMEZONES: list[str] = [
     "UTC",
@@ -24,6 +26,42 @@ TIMEZONES: list[str] = [
     "Asia/Kolkata",
     "Australia/Sydney",
 ]
+
+def detect_system_timezone(
+    etc_timezone: Path = Path("/etc/timezone"), etc_localtime: Path = Path("/etc/localtime")
+) -> str:
+    """Best-effort IANA zone name of the host machine (e.g. "Europe/Berlin"),
+    read straight from the OS - this device is Linux-only (see the RPi.GPIO
+    dependency), so the two standard sources below cover it. Falls back to
+    "UTC" if neither is available/valid (e.g. a minimal container without
+    tzdata) - used as the "Zeitzone" setting's default so a fresh install
+    matches the physical clock's location without manual configuration."""
+    if etc_timezone.is_file():
+        name = etc_timezone.read_text().strip()
+        if _is_valid_zone(name):
+            return name
+
+    try:
+        localtime_target = etc_localtime.resolve()
+    except OSError:
+        localtime_target = None
+    if localtime_target is not None and "zoneinfo" in localtime_target.parts:
+        name = "/".join(localtime_target.parts[localtime_target.parts.index("zoneinfo") + 1:])
+        if _is_valid_zone(name):
+            return name
+
+    return "UTC"
+
+
+def _is_valid_zone(name: str) -> bool:
+    if not name:
+        return False
+    try:
+        ZoneInfo(name)
+        return True
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+
 
 FIELD_TYPES: dict[str, dict[str, Any]] = {
     "int": {"widget": "number"},

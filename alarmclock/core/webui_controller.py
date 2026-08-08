@@ -26,6 +26,7 @@ from alarmclock.modules.settings_types import (
     FIELD_TYPES,
     TIMEZONES,
     SettingsValidationError,
+    detect_system_timezone,
     validate_against_schema,
 )
 from alarmclock.core.logger_wrapper import configure_external_logger, logger
@@ -317,6 +318,13 @@ class WebUIController(Configurable):
 
     def get_settings_schema(self) -> dict[str, dict[str, Any]]:
         """Get the settings schema for this controller."""
+        # Detected fresh on every call (cheap - a couple of file reads) so a
+        # host whose system timezone changes still gets a sensible default;
+        # once a value is actually saved to settings.toml this is irrelevant.
+        detected_timezone = detect_system_timezone()
+        timezone_options = (
+            TIMEZONES if detected_timezone in TIMEZONES else [detected_timezone, *TIMEZONES]
+        )
         schema = {
             "host": {
                 "type": "string",
@@ -334,10 +342,10 @@ class WebUIController(Configurable):
             },
             "timezone": {
                 "type": "select",
-                "options": TIMEZONES,
+                "options": timezone_options,
                 "label": "Zeitzone",
                 "requires_restart": True,
-                "default": "UTC",
+                "default": detected_timezone,
             },
             "password": {
                 "type": "password",

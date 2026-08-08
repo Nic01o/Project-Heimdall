@@ -4,6 +4,7 @@ import pytest
 from alarmclock.modules.settings_types import (
     FIELD_TYPES,
     SettingsValidationError,
+    detect_system_timezone,
     validate_against_schema,
 )
 
@@ -184,3 +185,61 @@ class TestSchemaValidation:
         result = validate_against_schema({"volume": 75}, schema)
         assert result == {"volume": 75}
         assert "active" not in result
+
+
+# -- detect_system_timezone ----------------------------------------------------
+
+class TestDetectSystemTimezone:
+    def test_reads_etc_timezone(self, tmp_path):
+        etc_timezone = tmp_path / "timezone"
+        etc_timezone.write_text("Europe/Berlin\n")
+
+        assert detect_system_timezone(etc_timezone=etc_timezone) == "Europe/Berlin"
+
+    def test_falls_back_to_etc_localtime_symlink(self, tmp_path):
+        """No /etc/timezone file - resolve the zone name from where
+        /etc/localtime points instead (the other standard Linux mechanism)."""
+        zoneinfo_dir = tmp_path / "usr" / "share" / "zoneinfo"
+        zone_file = zoneinfo_dir / "Europe" / "Vienna"
+        zone_file.parent.mkdir(parents=True)
+        zone_file.write_bytes(b"")
+        etc_localtime = tmp_path / "localtime"
+        etc_localtime.symlink_to(zone_file)
+
+        result = detect_system_timezone(
+            etc_timezone=tmp_path / "nonexistent-timezone-file", etc_localtime=etc_localtime
+        )
+        assert result == "Europe/Vienna"
+
+    def test_falls_back_to_utc_when_nothing_available(self, tmp_path):
+        result = detect_system_timezone(
+            etc_timezone=tmp_path / "nonexistent-timezone-file",
+            etc_localtime=tmp_path / "nonexistent-localtime-link",
+        )
+        assert result == "UTC"
+
+    def test_ignores_garbage_etc_timezone_content(self, tmp_path):
+        """A corrupt/nonsensical /etc/timezone must not produce a zone name
+        that later blows up ZoneInfo(...) inside the Scheduler - fall back
+        to UTC instead of propagating garbage."""
+        etc_timezone = tmp_path / "timezone"
+        etc_timezone.write_text("not a real timezone\n")
+
+        result = detect_system_timezone(
+            etc_timezone=etc_timezone, etc_localtime=tmp_path / "nonexistent-localtime-link"
+        )
+        assert result == "UTC"
+
+    def test_prefers_etc_timezone_over_localtime_symlink(self, tmp_path):
+        etc_timezone = tmp_path / "timezone"
+        etc_timezone.write_text("Europe/Berlin\n")
+
+        zoneinfo_dir = tmp_path / "usr" / "share" / "zoneinfo"
+        zone_file = zoneinfo_dir / "Asia" / "Tokyo"
+        zone_file.parent.mkdir(parents=True)
+        zone_file.write_bytes(b"")
+        etc_localtime = tmp_path / "localtime"
+        etc_localtime.symlink_to(zone_file)
+
+        result = detect_system_timezone(etc_timezone=etc_timezone, etc_localtime=etc_localtime)
+        assert result == "Europe/Berlin"

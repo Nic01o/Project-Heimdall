@@ -234,16 +234,20 @@ class Scheduler(Configurable):
         return None
 
     def get_alarm_reference_date(self, now: datetime.datetime | None = None) -> datetime.date | None:
-        """The date the master toggle / next-alarm override currently acts
-        on. Falls back to the soonest future date already carrying a
-        standalone override when no recurring group exists at all, so a
-        one-off alarm can still be set/cleared with an empty plan."""
+        """The date the master toggle (skip) and the override display/clear
+        act on: the earlier of the next recurring-group occurrence and the
+        soonest future date already carrying a standalone override. The
+        override half matters once `override_next_alarm_time` has placed an
+        override on a day no group covers (e.g. plan only has Monday, but
+        an override sits on tomorrow) - without it, this would keep
+        pointing at the far-off group day and the override would be
+        invisible to the UI and to `clear_alarm_override`/`skip_next_alarm`."""
         now = now or self._now()
-        reference = self._next_reference_date(now)
-        if reference is not None:
-            return reference
+        group_reference = self._next_reference_date(now)
         future_overrides = [date for date in self._plan.overrides if date >= now.date()]
-        return min(future_overrides) if future_overrides else None
+        override_reference = min(future_overrides) if future_overrides else None
+        candidates = [d for d in (group_reference, override_reference) if d is not None]
+        return min(candidates) if candidates else None
 
     def is_next_alarm_skipped(self, now: datetime.datetime | None = None) -> bool:
         now = now or self._now()
@@ -306,18 +310,37 @@ class Scheduler(Configurable):
         await self._persist()
         return True
 
+    def _immediate_reference_date(self, now: datetime.datetime) -> datetime.date:
+        """The single calendar date `override_next_alarm_time` acts on:
+        today, unless today's effective wake-up (its own override if any,
+        else its recurring group time) has already happened - then
+        tomorrow. A day with nothing scheduled counts as "not yet
+        happened", so it's still fair game for today.
+
+        Deliberately never looks further than tomorrow, unlike
+        `get_alarm_reference_date` (which skip_next_alarm uses and which
+        may point at a group day a week out): the override always overrides
+        the *next* morning, whether or not the plan says anything about it,
+        not the next day the recurring plan happens to mention."""
+        today = now.date()
+        effective_time = self._plan.overrides.get(
+            today, self._time_for_day(self._plan, Weekday(today.weekday()))
+        )
+        if effective_time is not None:
+            today_dt = datetime.datetime.combine(today, effective_time, tzinfo=now.tzinfo)
+            if today_dt <= now:
+                return today + datetime.timedelta(days=1)
+        return today
+
     async def override_next_alarm_time(
         self, time: datetime.time, now: datetime.datetime | None = None
     ) -> datetime.date:
-        """Replace the next occurrence's time for this one instance only.
-        With no recurring groups configured, anchors to today (if `time`
-        hasn't passed yet) or tomorrow, so a standalone one-off alarm can
-        still be set."""
+        """Replace tomorrow's wake-up with `time` for this one instance only
+        - or today's, if today's own alarm hasn't rung yet. Applies
+        regardless of what the recurring plan says for that date, so a
+        one-off alarm can be set even on a day the plan leaves empty."""
         now = now or self._now()
-        reference = self.get_alarm_reference_date(now)
-        if reference is None:
-            candidate = datetime.datetime.combine(now.date(), time, tzinfo=now.tzinfo)
-            reference = now.date() if candidate > now else now.date() + datetime.timedelta(days=1)
+        reference = self._immediate_reference_date(now)
         self._plan.overrides[reference] = time
         self._changed.set()
         await self._persist()
