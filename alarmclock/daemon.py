@@ -31,7 +31,9 @@ async def run(demo_alarm_seconds: int | None) -> None:
     bus = EventBus()
     webui_controller = WebUIController(name="webui", bus=bus, settings_path=SETTINGS_PATH)
     scheduler = Scheduler(bus=bus, name="scheduler", settings_path=SETTINGS_PATH)
+
     await scheduler.load_config(scheduler.name)
+    await webui_controller.load_config(webui_controller.name)
 
     # Setup modules (including core webui controller)
     modules: list[Module] = []
